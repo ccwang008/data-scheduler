@@ -1,0 +1,2051 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工作流编排 - V13.0 Final</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; overflow: hidden; background: #f0f2f5; user-select: none; }
+        
+        /* 画布背景 */
+        .canvas-bg {
+            background-color: #f8fafc;
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        /* 节点样式 */
+        .node {
+            position: absolute; width: 220px; background: white; border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+            border: 1px solid #e2e8f0; cursor: pointer; z-index: 10; transition: transform 0.1s, box-shadow 0.2s;
+        }
+        .node:hover { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); border-color: #3b82f6; transform: translateY(-2px); }
+        .node.selected { outline: 2px solid #3b82f6; outline-offset: 2px; }
+
+        /* 状态条 */
+        .status-bar { height: 4px; border-radius: 8px 8px 0 0; width: 100%; }
+        .st-pending { background: #cbd5e1; }
+        .st-running { background: #3b82f6; animation: shimmer 1.5s infinite linear; background-image: linear-gradient(90deg, #3b82f6 0%, #93c5fd 50%, #3b82f6 100%); background-size: 200% 100%; }
+        .st-success { background: #22c55e; }
+        .st-fail { background: #ef4444; }
+        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
+        /* 端口 */
+        .port {
+            width: 12px; height: 12px; background: white; border: 2px solid #94a3b8; border-radius: 50%;
+            position: absolute; top: 50%; transform: translateY(-50%); z-index: 20; cursor: crosshair; transition: all 0.2s;
+        }
+        .port:hover { background: #3b82f6; border-color: #3b82f6; transform: scale(1.3); }
+        .port-in { left: -6px; }
+        .port-out { right: -6px; }
+
+        /* 连线 SVG */
+        #svg-layer { pointer-events: none; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; }
+        .edge { fill: none; stroke: #94a3b8; stroke-width: 2px; marker-end: url(#arrowhead); }
+
+        /* 日志面板动画 */
+        #console-panel { transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        
+        /* 结果弹窗 JSON */
+        .json-key { color: #d19a66; } .json-str { color: #98c379; } .json-num { color: #e5c07b; } .json-bool { color: #56b6c2; }
+    </style>
+</head>
+<body class="flex flex-col h-screen" onclick="hideContextMenu()">
+
+    <div class="flex flex-col h-screen">
+        <header class="h-14 bg-white border-b flex items-center justify-between px-6 z-50 shadow-sm">
+        <div class="flex items-center gap-4">
+            <a href="dag_list.html" class="text-gray-500 hover:text-blue-600 text-sm flex items-center gap-1"><i class="fas fa-arrow-left"></i> 返回</a>
+            <div class="h-6 w-px bg-gray-200"></div>
+            <h1 class="font-bold text-gray-800" id="wf-title">工作流编排</h1>
+            <span class="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded border border-blue-100">V13.0 Validated</span>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="saveWorkflow()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
+                <i class="fas fa-save"></i> 保存
+            </button>
+            <button onclick="openRunConfig()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium shadow-sm shadow-blue-500/30 flex items-center gap-2">
+                <i class="fas fa-play"></i> 运行任务
+            </button>
+        </div>
+        </header>
+
+        <div class="flex-1 flex overflow-hidden relative">
+        <aside class="w-64 bg-white border-r flex flex-col z-20 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
+            <div class="p-4 border-b bg-gray-50/50 text-xs font-bold text-gray-400 uppercase tracking-wider">Available Nodes</div>
+            <div class="p-4 space-y-3">
+                <div class="p-3 border rounded-lg bg-white hover:border-blue-500 hover:shadow-md cursor-grab flex items-center gap-3 transition group" draggable="true" ondragstart="dragStart(event, 'exchange')">
+                    <div class="w-10 h-10 rounded bg-blue-50 text-blue-600 flex items-center justify-center text-lg group-hover:bg-blue-600 group-hover:text-white transition"><i class="fas fa-exchange-alt"></i></div>
+                    <div>
+                        <div class="text-sm font-bold text-gray-700">数据交换</div>
+                        <div class="text-[10px] text-gray-400">校验: 行数一致性</div>
+                    </div>
+                </div>
+                <div class="p-3 border rounded-lg bg-white hover:border-orange-500 hover:shadow-md cursor-grab flex items-center gap-3 transition group" draggable="true" ondragstart="dragStart(event, 'etl')">
+                    <div class="w-10 h-10 rounded bg-orange-50 text-orange-600 flex items-center justify-center text-lg group-hover:bg-orange-600 group-hover:text-white transition"><i class="fas fa-cogs"></i></div>
+                    <div>
+                        <div class="text-sm font-bold text-gray-700">可视化ETL</div>
+                        <div class="text-[10px] text-gray-400">校验: 脏数据检测</div>
+                    </div>
+                </div>
+                <div class="p-3 border rounded-lg bg-white hover:border-green-500 hover:shadow-md cursor-grab flex items-center gap-3 transition group" draggable="true" ondragstart="dragStart(event, 'dqc')">
+                    <div class="w-10 h-10 rounded bg-green-50 text-green-600 flex items-center justify-center text-lg group-hover:bg-green-600 group-hover:text-white transition"><i class="fas fa-clipboard-check"></i></div>
+                    <div>
+                        <div class="text-sm font-bold text-gray-700">数据质检 (DQC)</div>
+                        <div class="text-[10px] text-gray-400">校验: 空值/波动率</div>
+                    </div>
+                </div>
+                <div class="p-3 border rounded-lg bg-white hover:border-purple-500 hover:shadow-md cursor-grab flex items-center gap-3 transition group" draggable="true" ondragstart="dragStart(event, 'sql')">
+                    <div class="w-10 h-10 rounded bg-purple-50 text-purple-600 flex items-center justify-center text-lg group-hover:bg-purple-600 group-hover:text-white transition"><i class="fas fa-database"></i></div>
+                    <div>
+                        <div class="text-sm font-bold text-gray-700">SQL文件</div>
+                        <div class="text-[10px] text-gray-400">校验: 语法/性能</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 relative canvas-bg" id="canvas-container" ondrop="dropNode(event)" ondragover="allowDrop(event)" onclick="closeSettings()" oncontextmenu="return false;">
+            <svg id="svg-layer"><defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" /></marker></defs></svg>
+            <div id="node-layer"></div>
+        </main>
+
+        <!-- 右侧基础设置面板 -->
+        <aside id="settings-panel" class="w-72 bg-white border-l flex flex-col z-20 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] hidden">
+            <div class="p-4 border-b bg-gray-50/50 flex items-center justify-between">
+                <div class="text-xs font-bold text-gray-700 uppercase tracking-wider">基础设置</div>
+                <button onclick="closeSettings()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4 space-y-5">
+                <!-- 节点基础信息 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">节点名称</label>
+                    <input type="text" id="node-name" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="输入节点名称" onchange="updateNodeName()">
+                </div>
+
+                <!-- 任务类型选择 (仅数据交换节点显示) -->
+                <div id="task-type-section" class="hidden">
+                    <label class="block text-xs font-bold text-gray-600 mb-2">任务类型</label>
+                    <select id="task-type-select" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" onchange="updateTaskType()">
+                        <option value="">-- 选择任务类型 --</option>
+                        <option value="库表交换">库表交换</option>
+                        <option value="整库迁移">整库迁移</option>
+                        <option value="脚本模式">脚本模式</option>
+                        <option value="文件同步">文件同步</option>
+                        <option value="文本解析">文本解析</option>
+                        <option value="数据转文件">数据转文件</option>
+                        <option value="api转数据">api转数据</option>
+                        <option value="api转文件">api转文件</option>
+                        <option value="数据推送">数据推送</option>
+                        <option value="应用系统接入">应用系统接入</option>
+                        <option value="hive库迁移">hive库迁移</option>
+                    </select>
+                </div>
+
+                <!-- 任务名称选择 -->
+                <div id="task-name-section">
+                    <label class="block text-xs font-bold text-gray-600 mb-2">任务名称</label>
+                    <div class="relative">
+                        <input type="text" id="task-search" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="搜索任务名称..." oninput="filterTaskList()">
+                        <div id="task-dropdown" class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto hidden">
+                            <div class="p-2 text-xs text-gray-500 text-center">加载任务中...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据校验配置 (仅数据交换节点显示) -->
+                <div id="data-validation-section" class="hidden">
+                    <div class="pt-3 border-t">
+                        <label class="flex items-center gap-2 cursor-pointer mb-3">
+                            <input type="checkbox" id="enable-data-validation" class="w-4 h-4 rounded" onchange="toggleDataValidation()">
+                            <span class="text-sm font-bold text-gray-600">开启数据校验</span>
+                        </label>
+                        
+                        <!-- 校验方式选择 -->
+                        <div id="validation-method-section" class="hidden">
+                            <label class="block text-xs font-bold text-gray-600 mb-2">校验方式</label>
+                            <select id="validation-method" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500 mb-4" onchange="updateValidationMethod()">
+                                <option value="">-- 选择校验方式 --</option>
+                                <option value="完整对比">完整对比</option>
+                                <option value="抽样对比">抽样对比</option>
+                                <option value="行数校验">行数校验</option>
+                                <option value="字段对比">字段对比</option>
+                            </select>
+                            
+                            <!-- 抽样比例配置 -->
+                            <div id="sampling-ratio-section" class="hidden">
+                                <label class="block text-xs font-bold text-gray-600 mb-2">抽样比例</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="range" id="sampling-ratio-slider" class="flex-1" min="1" max="100" value="10" onchange="updateSamplingRatio()">
+                                    <span id="sampling-ratio-display" class="text-sm font-mono text-gray-600 min-w-12">10%</span>
+                                </div>
+                            </div>
+
+                            <!-- 字段对比配置 -->
+                            <div id="field-comparison-section" class="hidden">
+                                <div class="space-y-3">
+                                    <!-- 来源表选择（可多选） -->
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-600 mb-2">来源表（可多选）</label>
+                                        <div id="source-table-options" class="space-y-2"></div>
+                                        <div id="selected-source-tables" class="flex flex-wrap gap-2 mt-2"></div>
+                                        <p class="text-[11px] text-gray-400 mt-1">先选择至少 1 张来源表，再配置对比字段</p>
+                                    </div>
+
+                                    <!-- 对比字段配置 -->
+                                    <div id="comparison-fields-section" class="hidden">
+                                        <label class="block text-xs font-bold text-gray-600 mb-2">对比字段</label>
+                                        <div id="comparison-fields-list" class="space-y-2 max-h-40 overflow-y-auto"></div>
+                                        <button onclick="addComparisonField()" class="mt-2 w-full px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded text-xs font-medium transition">
+                                            <i class="fas fa-plus"></i> 添加字段
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据质检配置 (仅 DQC 节点显示) -->
+                <div id="dqc-section" class="hidden">
+                    <div class="pt-3 border-t space-y-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-2">质检任务</label>
+                            <div class="relative">
+                                <input type="text" id="dqc-task-search" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="搜索质检任务..." oninput="filterDqcTaskList()" onclick="showDqcTaskDropdown()">
+                                <div id="dqc-task-dropdown" class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto hidden">
+                                    <div class="p-2 text-xs text-gray-500 text-center">加载任务中...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 节点类型信息 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">节点类型</label>
+                    <div id="node-type" class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600"></div>
+                </div>
+
+                <!-- 节点ID -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">节点 ID</label>
+                    <div class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono text-gray-500" id="node-id"></div>
+                </div>
+
+                <!-- 执行超时 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">执行超时 (秒)</label>
+                    <input type="number" id="node-timeout" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="默认 300" min="10" max="7200" onchange="updateNodeTimeout()">
+                </div>
+
+                <!-- 重试次数 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">失败重试次数</label>
+                    <input type="number" id="node-retry" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="默认 0" min="0" max="5" onchange="updateNodeRetry()">
+                </div>
+
+                <!-- 节点描述 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">节点描述</label>
+                    <textarea id="node-desc" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500 resize-none" placeholder="添加节点描述..." rows="3" onchange="updateNodeDesc()"></textarea>
+                </div>
+
+                <!-- 告警配置 -->
+                <div class="pt-3 border-t">
+                    <label class="block text-xs font-bold text-gray-600 mb-3">告警配置</label>
+                    <label class="flex items-center gap-2 cursor-pointer mb-2">
+                        <input type="checkbox" id="alert-on-fail" class="w-4 h-4 rounded" onchange="updateNodeAlert()">
+                        <span class="text-sm text-gray-600">执行失败时告警</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="alert-on-slow" class="w-4 h-4 rounded" onchange="updateNodeAlert()">
+                        <span class="text-sm text-gray-600">执行超过 1 分钟时告警</span>
+                    </label>
+                </div>
+
+                <!-- 删除按钮 -->
+                <button onclick="deleteNode()" class="w-full mt-6 px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition">
+                    <i class="fas fa-trash-alt"></i> 删除节点
+                </button>
+            </div>
+        </aside>
+    </div>
+
+    <div id="console-panel" class="h-0 bg-slate-900 text-slate-300 absolute bottom-0 left-0 right-0 z-40 flex flex-col shadow-[0_-5px_15px_rgba(0,0,0,0.3)]">
+        <div class="h-9 px-4 bg-slate-800 border-t border-slate-700 flex items-center justify-between cursor-pointer hover:bg-slate-750 transition" onclick="this.parentElement.classList.toggle('open')">
+            <span class="text-xs font-mono font-bold flex items-center gap-2"><i class="fas fa-terminal"></i> 运行校验日志</span>
+            <i class="fas fa-chevron-up text-xs"></i>
+        </div>
+        <div id="log-container" class="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-slate-600"></div>
+    </div>
+
+    <div id="ctx-menu" class="fixed hidden bg-white border border-gray-200 shadow-xl rounded-lg w-48 py-1 z-50 text-sm">
+        <div class="px-3 py-2 text-xs text-gray-400 font-bold border-b mb-1">节点操作</div>
+        <button onclick="contextMenuSettings()" class="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-2"><i class="fas fa-cog w-4"></i> 基础设置</button>
+        <button onclick="viewExchangeResult()" id="btn-view-exchange" class="w-full text-left px-4 py-2 hover:bg-amber-50 hover:text-amber-600 flex items-center gap-2 hidden"><i class="fas fa-table w-4"></i> 查看交换结果</button>
+        <button onclick="viewEtlResult()" id="btn-view-etl" class="w-full text-left px-4 py-2 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-2 hidden"><i class="fas fa-stream w-4"></i> 查看ETL结果</button>
+        <button onclick="viewResult()" id="btn-view-res" class="w-full text-left px-4 py-2 hover:bg-green-50 hover:text-green-600 flex items-center gap-2"><i class="fas fa-poll-h w-4"></i> 校验报告</button>
+        <button onclick="deleteNode()" class="w-full text-left px-4 py-2 hover:bg-red-50 hover:text-red-600 flex items-center gap-2"><i class="fas fa-trash-alt w-4"></i> 删除节点</button>
+    </div>
+
+    <div id="res-modal" class="fixed inset-0 z-[60] hidden">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeResult()"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] bg-white rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
+                <h3 class="font-bold text-gray-800">校验详情报告</h3>
+                <button onclick="closeResult()" class="text-gray-400 hover:text-gray-700"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="flex-1 bg-[#282c34] p-6 overflow-auto">
+                <pre class="font-mono text-sm leading-6" id="json-viewer"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据交换预览弹窗 -->
+    <div id="exchange-modal" class="fixed inset-0 z-[60] hidden">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeExchangeResult()"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[780px] bg-white rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
+                <div>
+                    <h3 class="font-bold text-gray-800 flex items-center gap-2"><i class="fas fa-table text-amber-500"></i> 数据交换结果预览</h3>
+                    <div id="exchange-meta" class="text-xs text-gray-500 mt-1"></div>
+                </div>
+                <button onclick="closeExchangeResult()" class="text-gray-400 hover:text-gray-700"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6 space-y-4 overflow-auto">
+                <div id="exchange-stats" class="text-sm text-gray-700"></div>
+                <div>
+                    <div class="text-xs font-bold text-gray-600 mb-2">样本数据（最多 5 行）</div>
+                    <div class="border rounded-lg overflow-x-auto">
+                        <table class="min-w-full text-xs text-left">
+                            <thead id="exchange-sample-head" class="bg-gray-50 text-gray-500"></thead>
+                            <tbody id="exchange-sample-body" class="divide-y"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ETL 结果预览弹窗 -->
+    <div id="etl-modal" class="fixed inset-0 z-[60] hidden">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeEtlResult()"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[860px] bg-white rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
+                <div>
+                    <h3 class="font-bold text-gray-800 flex items-center gap-2"><i class="fas fa-stream text-indigo-500"></i> ETL 处理结果</h3>
+                    <div id="etl-meta" class="text-xs text-gray-500 mt-1"></div>
+                </div>
+                <button onclick="closeEtlResult()" class="text-gray-400 hover:text-gray-700"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6 flex-1 flex flex-col gap-4 overflow-auto">
+                <div id="etl-stats" class="text-sm text-gray-700 grid grid-cols-3 gap-3"></div>
+                <div class="flex items-center justify-between">
+                    <div class="text-xs text-gray-500">默认显示前 500 条，可分页浏览</div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <button id="etl-prev" class="px-3 py-1 border border-gray-200 rounded bg-gray-50 hover:bg-gray-100" onclick="changeEtlPage(-1)">上一页</button>
+                        <span id="etl-page-info" class="text-gray-600"></span>
+                        <button id="etl-next" class="px-3 py-1 border border-gray-200 rounded bg-gray-50 hover:bg-gray-100" onclick="changeEtlPage(1)">下一页</button>
+                    </div>
+                </div>
+                <div class="border rounded-lg overflow-x-auto">
+                    <table class="min-w-full text-xs text-left">
+                        <thead id="etl-sample-head" class="bg-gray-50 text-gray-500"></thead>
+                        <tbody id="etl-sample-body" class="divide-y"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 运行任务调度配置弹窗 -->
+    <div id="run-config-modal" class="fixed inset-0 z-[70] hidden">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeRunConfig()"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] bg-white rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50 flex-shrink-0">
+                <h3 class="font-bold text-gray-800 text-sm">运行任务计划</h3>
+                <button onclick="closeRunConfig()" class="text-gray-400 hover:text-gray-700"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="px-6 py-4 space-y-4 text-sm overflow-y-auto flex-1">
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">调度类型</label>
+                    <select id="run-schedule-type" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" onchange="updateRunConfigTypeUI()">
+                        <option value="实时">实时（立即执行）</option>
+                        <option value="定时">定时（一次性或周期任务）</option>
+                        <option value="定时Cron">定时（Cron表达式）</option>
+                    </select>
+                </div>
+
+                <!-- Cron 表达式配置（当选择"定时（Cron表达式）"时显示） -->
+                <div id="run-cron-wrapper" class="hidden">
+                    <label class="block text-xs font-bold text-gray-600 mb-2">Cron 表达式</label>
+                    <input type="text" id="run-cron-expression" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500 font-mono" placeholder="例如: 0 0 * * *">
+                    <p class="text-[11px] text-gray-400 mt-1">格式: 分 时 日 月 周 (例如: <code class="bg-gray-100 px-1 rounded">0 0 * * *</code> 表示每天 0 点)</p>
+                </div>
+
+                <div id="run-timing-wrapper" class="hidden space-y-3">
+                    <!-- 一次性 or 周期 -->
+                    <div>
+                        <label class="block text-xs font-bold text-gray-600 mb-1">调度周期</label>
+                        <div class="flex items-center gap-4 text-xs">
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="radio" name="run-once-or-cycle" value="once" onchange="updateRunTimingUI()" checked>
+                                <span>一次性任务</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="radio" name="run-once-or-cycle" value="cycle" onchange="updateRunTimingUI()">
+                                <span>周期任务</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 一次性任务启动时间 -->
+                    <div id="run-once-wrapper">
+                        <label class="block text-xs font-bold text-gray-600 mb-1">启动时间</label>
+                        <input type="datetime-local" id="run-once-start" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500">
+                    </div>
+
+                    <!-- 周期任务配置 -->
+                    <div id="run-cycle-wrapper" class="hidden space-y-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 mb-1">调度频率</label>
+                            <select id="run-cycle-unit" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" onchange="updateRunCycleUnitUI()">
+                                <option value="minute">每 N 分钟</option>
+                                <option value="hour">每 N 小时</option>
+                                <option value="day">每天</option>
+                                <option value="week">每周</option>
+                                <option value="month">每月</option>
+                            </select>
+                        </div>
+                        <div id="run-cycle-detail" class="space-y-2">
+                            <!-- 这里的具体控件由 JS 根据 unit 动态渲染 -->
+                        </div>
+                        
+                        <!-- 任务有效期 -->
+                        <div class="pt-2 border-t space-y-2">
+                            <label class="block text-xs font-bold text-gray-600 mb-1">任务有效期</label>
+                            <div class="flex items-center gap-2">
+                                <input type="date" id="run-cycle-valid-start" class="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" placeholder="开始日期">
+                                <span class="text-xs text-gray-500">至</span>
+                                <input type="date" id="run-cycle-valid-end" class="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" placeholder="结束日期">
+                            </div>
+                            <p class="text-[11px] text-gray-400">留空表示永久有效</p>
+                        </div>
+                        
+                        <!-- 日历选择 -->
+                        <div class="space-y-2">
+                            <label class="block text-xs font-bold text-gray-600 mb-1">日历选择</label>
+                            <select id="run-cycle-calendar" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" onchange="updateCalendarSelection()">
+                                <option value="">默认日历（所有日期）</option>
+                                <option value="workday">工作日（周一至周五）</option>
+                                <option value="weekend">周末（周六、周日）</option>
+                                <option value="workday-exclude-holiday">工作日（排除节假日）</option>
+                                <option value="custom">自定义日历</option>
+                            </select>
+                            <div id="run-cycle-custom-calendar-wrapper" class="hidden">
+                                <input type="text" id="run-cycle-custom-calendar" class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500 mt-1" placeholder="输入自定义日历名称或ID">
+                                <p class="text-[11px] text-gray-400 mt-1">可在系统日历管理中创建自定义日历</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="flex items-center gap-2 cursor-pointer mb-2">
+                        <input type="checkbox" id="run-delay-alert" class="w-4 h-4 rounded" onchange="updateDelayAlertUI()">
+                        <span class="text-sm font-bold text-gray-700">延迟告警</span>
+                    </label>
+                    <div id="run-delay-time-wrapper" class="hidden space-y-2 pl-6">
+                        <div class="flex items-center gap-2">
+                            <input type="number" id="run-delay-hours" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" placeholder="0" min="0" onchange="updateDelayTimeTotal()">
+                            <span class="text-xs text-gray-500">小时</span>
+                            <input type="number" id="run-delay-minutes" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" placeholder="0" min="0" max="59" onchange="updateDelayTimeTotal()">
+                            <span class="text-xs text-gray-500">分钟</span>
+                            <input type="number" id="run-delay-seconds" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" placeholder="0" min="0" max="59" onchange="updateDelayTimeTotal()">
+                            <span class="text-xs text-gray-500">秒</span>
+                        </div>
+                        <p class="text-[11px] text-gray-400">超过设定时间未完成将触发告警</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-2">停止策略</label>
+                    <select id="run-stop-strategy" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500">
+                        <option value="continue">不中断（记录告警，继续后续节点）</option>
+                        <option value="failfast">Fail Fast（节点失败时立即中断链路）</option>
+                    </select>
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t bg-gray-50 flex justify-end gap-3 flex-shrink-0">
+                <button onclick="closeRunConfig()" class="px-4 py-1.5 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-50">取消</button>
+                <button onclick="confirmRunWithConfig()" class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-2">
+                    <i class="fas fa-play"></i> 确认运行
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 全局状态 ---
+        const STORAGE_KEY = 'ds_workflows_v13';
+        const urlParams = new URLSearchParams(window.location.search);
+        const wfId = urlParams.get('id');
+        
+        const tableOptions = [
+            { id: 'table1', name: 'user_info' },
+            { id: 'table2', name: 'order_detail' },
+            { id: 'table3', name: 'product_catalog' },
+            { id: 'table4', name: 'payment_record' },
+            { id: 'table5', name: 'customer_profile' },
+        ];
+        
+        let nodes = [], edges = [], idCounter = 1;
+        let selectedNodeId = null;
+        let tempLine = null;
+        // 全局运行调度配置（整体任务计划）
+        let runScheduleConfig = {
+            type: '实时',              // 实时 / 定时
+            mode: 'once',             // once / cycle
+            cycleUnit: 'minute',      // minute/hour/day/week/month
+            onceStartTime: '',        // 一次性任务启动时间 (ISO 字符串)
+            cycleConfig: {},          // 周期配置（不同 unit 不同结构）
+            cron: '',                 // 由上述配置推导出的 Cron，供后端使用
+            delayAlert: false,        // 是否延迟告警
+            delaySeconds: 0,          // 延迟告警秒数
+            stopStrategy: 'continue'  // continue / failfast
+        };
+
+        // --- 初始化：加载数据 ---
+        function init() {
+            if (wfId) {
+                const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                const wf = list.find(i => i.id === wfId);
+                if (wf) {
+                    document.getElementById('wf-title').innerText = wf.name;
+                    nodes = wf.nodes || [];
+                    edges = wf.edges || [];
+                    // 读取整体任务调度配置
+                    if (wf.runScheduleConfig) {
+                        runScheduleConfig = Object.assign({}, runScheduleConfig, wf.runScheduleConfig);
+                    }
+                    // 重新计算 ID 计数器避免冲突
+                    const maxId = nodes.reduce((max, n) => Math.max(max, parseInt(n.id.split('_')[1] || 0)), 0);
+                    idCounter = maxId + 1;
+                }
+            }
+            render();
+        }
+
+        // --- 核心：渲染画布 ---
+        function render() {
+            const nl = document.getElementById('node-layer');
+            const sl = document.getElementById('svg-layer');
+            nl.innerHTML = '';
+            
+            // 清理旧连线 (保留defs)
+            Array.from(sl.children).forEach(c => { if(c.tagName !== 'defs') c.remove() });
+
+            // 1. 绘制连线
+            edges.forEach(e => {
+                const n1 = nodes.find(n=>n.id===e.source);
+                const n2 = nodes.find(n=>n.id===e.target);
+                if(n1 && n2) {
+                    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    p.setAttribute("d", getPath(n1, n2));
+                    p.setAttribute("class", "edge");
+                    sl.appendChild(p);
+                }
+            });
+
+            // 2. 绘制节点
+            nodes.forEach(n => {
+                const el = document.createElement('div');
+                el.className = `node ${selectedNodeId===n.id?'selected':''}`;
+                el.style.left = n.x + 'px'; el.style.top = n.y + 'px';
+                
+                const meta = getNodeMeta(n.type);
+                const statusClass = n.status ? `st-${n.status}` : 'st-pending';
+
+                el.innerHTML = `
+                    <div class="status-bar ${statusClass}"></div>
+                    <div class="p-4 flex items-center">
+                        <div class="w-10 h-10 rounded-lg ${meta.bg} ${meta.color} flex items-center justify-center text-xl mr-3 shadow-sm border border-black/5">
+                            <i class="fas ${meta.icon}"></i>
+                        </div>
+                        <div class="overflow-hidden">
+                            <div class="text-sm font-bold text-gray-700 truncate w-32">${n.name}</div>
+                            <div class="text-[10px] text-gray-400 mt-0.5 truncate">${meta.desc}</div>
+                        </div>
+                    </div>
+                    <div class="port port-in"></div>
+                    <div class="port port-out" onmousedown="startConn(event, '${n.id}')"></div>
+                `;
+                
+                el.onmousedown = (e) => handleDrag(e, n);
+                el.onclick = (e) => { e.stopPropagation(); selectedNodeId = n.id; render(); openSettings(n); hideContextMenu(); };
+                el.oncontextmenu = (e) => showContextMenu(e, n.id);
+                nl.appendChild(el);
+            });
+        }
+
+        function getPath(n1, n2) {
+            // 贝塞尔曲线，简单的平滑连接
+            return `M ${n1.x+220} ${n1.y+42} C ${n1.x+270} ${n1.y+42}, ${n2.x-50} ${n2.y+42}, ${n2.x} ${n2.y+42}`;
+        }
+
+        function getNodeMeta(type) {
+            const map = {
+                'exchange': { bg:'bg-blue-50', color:'text-blue-600', icon:'fa-exchange-alt', desc:'Source -> Target', zh:'数据交换' },
+                'etl': { bg:'bg-orange-50', color:'text-orange-600', icon:'fa-cogs', desc:'Clean & Transform', zh:'可视化ETL' },
+                'dqc': { bg:'bg-green-50', color:'text-green-600', icon:'fa-clipboard-check', desc:'Quality Gate', zh:'数据质检' },
+                'sql': { bg:'bg-purple-50', color:'text-purple-600', icon:'fa-database', desc:'SQL Query', zh:'SQL文件' }
+            };
+            return map[type] || { bg:'bg-gray-50', color:'text-gray-500', icon:'fa-cube', desc:'Unknown', zh:'未知' };
+        }
+
+        // --- 交互：拖拽节点 ---
+        function handleDrag(e, n) {
+            if (e.button !== 0) return; // 只响应左键
+            const startX = e.clientX; const startY = e.clientY;
+            const origX = n.x; const origY = n.y;
+            
+            const move = (ev) => {
+                n.x = origX + (ev.clientX - startX);
+                n.y = origY + (ev.clientY - startY);
+                render();
+            };
+            const up = () => {
+                window.removeEventListener('mousemove', move);
+                window.removeEventListener('mouseup', up);
+            };
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+        }
+
+        // --- 交互：拖拽创建新节点 ---
+        function dragStart(ev, type) { ev.dataTransfer.setData("type", type); }
+        function allowDrop(ev) { ev.preventDefault(); }
+        function dropNode(ev) {
+            ev.preventDefault();
+            const type = ev.dataTransfer.getData("type");
+            if (!type) return;
+            const r = document.getElementById('canvas-container').getBoundingClientRect();
+            const meta = getNodeMeta(type);
+            const newNode = {
+                id: `node_${idCounter++}`,
+                type: type,
+                x: ev.clientX - r.left - 110,
+                y: ev.clientY - r.top - 40,
+                name: `${meta.zh}任务`,
+                taskName: '',
+                taskType: '',
+                enableDataValidation: false,
+                validationMethod: '',
+                samplingRatio: 10,
+                status: 'pending',
+                timeout: 300,
+                retry: 0,
+                desc: '',
+                alertOnFail: true,
+                alertOnSlow: false,
+                fieldComparisonSources: [],
+                comparisonFields: [],
+                dqcConfig: {
+                    enableNull: true,
+                    nullThreshold: 1,
+                    enableVolatility: true,
+                    volatilityThreshold: 3,
+                    enableUniq: true,
+                    uniqThreshold: 95,
+                    enableAnomaly: true,
+                    anomalyThreshold: 1,
+                    samplePercent: 10,
+                    windowSize: 5000
+                }
+            };
+            nodes.push(newNode);
+            selectedNodeId = newNode.id;
+            render();
+            openSettings(newNode);  // 自动打开设置面板
+        }
+
+        // --- 交互：连线 ---
+        function startConn(e, sourceId) {
+            e.stopPropagation();
+            const svg = document.getElementById('svg-layer');
+            tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            tempLine.setAttribute("class", "edge");
+            tempLine.style.strokeDasharray = "5,5"; // 虚线效果
+            svg.appendChild(tempLine);
+
+            const n1 = nodes.find(n => n.id === sourceId);
+            const r = document.getElementById('canvas-container').getBoundingClientRect();
+
+            const move = (ev) => {
+                const ex = ev.clientX - r.left;
+                const ey = ev.clientY - r.top;
+                tempLine.setAttribute("d", `M ${n1.x+220} ${n1.y+42} L ${ex} ${ey}`);
+            };
+
+            const up = (ev) => {
+                window.removeEventListener('mousemove', move);
+                window.removeEventListener('mouseup', up);
+                tempLine.remove();
+
+                // 检测是否落在目标端口上 (简单判断：鼠标下的元素是否为node的一部分)
+                // 这里为了简化，直接判断鼠标松开位置附近的节点
+                const ex = ev.clientX - r.left;
+                const ey = ev.clientY - r.top;
+                
+                // 查找是否落在某个节点的输入区域 (x-20 到 x+20, y+42)
+                const target = nodes.find(n => 
+                    ex > n.x - 20 && ex < n.x + 50 && 
+                    ey > n.y && ey < n.y + 80 && 
+                    n.id !== sourceId
+                );
+
+                if (target) {
+                    // 避免重复连线
+                    if (!edges.some(e => e.source === sourceId && e.target === target.id)) {
+                        edges.push({ source: sourceId, target: target.id });
+                        render();
+                    }
+                }
+            };
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+        }
+
+        // --- 功能：保存 ---
+        function saveWorkflow() {
+            if (!wfId) return alert("未找到工作流ID");
+            let list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            const idx = list.findIndex(i => i.id === wfId);
+            if (idx >= 0) {
+                list[idx].nodes = nodes;
+                list[idx].edges = edges;
+                list[idx].runScheduleConfig = runScheduleConfig;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+                
+                // 视觉反馈
+                const btn = document.querySelector('button i.fa-save').parentElement;
+                const originText = btn.innerHTML;
+                btn.innerHTML = `<i class="fas fa-check"></i> 已保存`;
+                btn.classList.add('text-green-600', 'bg-green-50');
+                setTimeout(() => {
+                    btn.innerHTML = originText;
+                    btn.classList.remove('text-green-600', 'bg-green-50');
+                }, 1000);
+            }
+        }
+
+        // --- 功能：运行任务调度配置 ---
+        function openRunConfig() {
+            const modal = document.getElementById('run-config-modal');
+            if (!modal) return;
+
+            // 填充当前配置
+            document.getElementById('run-schedule-type').value = runScheduleConfig.type || '实时';
+            document.getElementById('run-delay-alert').checked = !!runScheduleConfig.delayAlert;
+            // 填充延迟告警时间（小时、分钟、秒）
+            if (runScheduleConfig.delayHours !== undefined) {
+                document.getElementById('run-delay-hours').value = runScheduleConfig.delayHours || 0;
+            }
+            if (runScheduleConfig.delayMinutes !== undefined) {
+                document.getElementById('run-delay-minutes').value = runScheduleConfig.delayMinutes || 0;
+            }
+            if (runScheduleConfig.delaySeconds !== undefined) {
+                document.getElementById('run-delay-seconds').value = runScheduleConfig.delaySeconds || 0;
+            } else if (runScheduleConfig.delayTotalSeconds !== undefined) {
+                // 兼容旧版本：如果只有总秒数，则转换为小时、分钟、秒
+                const total = runScheduleConfig.delayTotalSeconds || 0;
+                const hours = Math.floor(total / 3600);
+                const minutes = Math.floor((total % 3600) / 60);
+                const seconds = total % 60;
+                document.getElementById('run-delay-hours').value = hours;
+                document.getElementById('run-delay-minutes').value = minutes;
+                document.getElementById('run-delay-seconds').value = seconds;
+            }
+            updateDelayAlertUI(); // 根据是否开启显示/隐藏输入框
+            document.getElementById('run-stop-strategy').value = runScheduleConfig.stopStrategy || 'continue';
+
+            // 调度周期相关
+            const mode = runScheduleConfig.mode || 'once';
+            const radios = document.getElementsByName('run-once-or-cycle');
+            radios.forEach(r => { r.checked = (r.value === mode); });
+            document.getElementById('run-once-start').value = runScheduleConfig.onceStartTime || '';
+            document.getElementById('run-cycle-unit').value = runScheduleConfig.cycleUnit || 'minute';
+            // 渲染周期任务细节
+            updateRunConfigTypeUI();
+            if (runScheduleConfig.type === '定时') {
+                updateRunTimingUI();
+                updateRunCycleUnitUI();
+                // 填充周期任务详细配置值
+                fillCycleConfigValues();
+                
+                // 填充有效期和日历配置
+                const cycleConfig = runScheduleConfig.cycleConfig || {};
+                if (runScheduleConfig.mode === 'cycle') {
+                    const validStartInput = document.getElementById('run-cycle-valid-start');
+                    const validEndInput = document.getElementById('run-cycle-valid-end');
+                    const calendarSelect = document.getElementById('run-cycle-calendar');
+                    const customCalendarInput = document.getElementById('run-cycle-custom-calendar');
+                    
+                    if (validStartInput && cycleConfig.validStart) {
+                        validStartInput.value = cycleConfig.validStart;
+                    }
+                    if (validEndInput && cycleConfig.validEnd) {
+                        validEndInput.value = cycleConfig.validEnd;
+                    }
+                    if (calendarSelect && cycleConfig.calendar) {
+                        calendarSelect.value = cycleConfig.calendar;
+                        updateCalendarSelection();
+                    }
+                    if (customCalendarInput && cycleConfig.customCalendar) {
+                        customCalendarInput.value = cycleConfig.customCalendar;
+                    }
+                }
+            } else if (runScheduleConfig.type === '定时Cron') {
+                // 填充 Cron 表达式
+                const cronInput = document.getElementById('run-cron-expression');
+                if (cronInput && runScheduleConfig.cron) {
+                    cronInput.value = runScheduleConfig.cron;
+                }
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeRunConfig() {
+            const modal = document.getElementById('run-config-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function updateRunConfigTypeUI() {
+            const type = document.getElementById('run-schedule-type').value;
+            const timingWrapper = document.getElementById('run-timing-wrapper');
+            const cronWrapper = document.getElementById('run-cron-wrapper');
+            
+            // 隐藏所有定时相关配置
+            if (timingWrapper) timingWrapper.classList.add('hidden');
+            if (cronWrapper) cronWrapper.classList.add('hidden');
+            
+            // 根据选择的类型显示对应的配置
+            if (type === '定时') {
+                // 定时（一次性或周期任务）
+                if (timingWrapper) timingWrapper.classList.remove('hidden');
+            } else if (type === '定时Cron') {
+                // 定时（Cron表达式）
+                if (cronWrapper) cronWrapper.classList.remove('hidden');
+            }
+        }
+
+        function updateRunTimingUI() {
+            const radios = document.getElementsByName('run-once-or-cycle');
+            let mode = 'once';
+            radios.forEach(r => { if (r.checked) mode = r.value; });
+            const onceWrapper = document.getElementById('run-once-wrapper');
+            const cycleWrapper = document.getElementById('run-cycle-wrapper');
+            if (mode === 'once') {
+                onceWrapper.classList.remove('hidden');
+                cycleWrapper.classList.add('hidden');
+            } else {
+                onceWrapper.classList.add('hidden');
+                cycleWrapper.classList.remove('hidden');
+                updateRunCycleUnitUI();
+            }
+        }
+
+        function updateRunCycleUnitUI() {
+            const unit = document.getElementById('run-cycle-unit').value;
+            const detail = document.getElementById('run-cycle-detail');
+            if (!detail) return;
+
+            if (unit === 'minute') {
+                detail.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-600">每</span>
+                        <input type="number" id="run-cycle-minute-n" min="1" value="5" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                        <span class="text-xs text-gray-600">分钟执行一次</span>
+                    </div>
+                `;
+            } else if (unit === 'hour') {
+                detail.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-600">每</span>
+                        <input type="number" id="run-cycle-hour-n" min="1" value="1" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                        <span class="text-xs text-gray-600">小时执行一次，在第</span>
+                        <input type="number" id="run-cycle-hour-minute" min="0" max="59" value="0" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                        <span class="text-xs text-gray-600">分钟</span>
+                    </div>
+                `;
+            } else if (unit === 'day') {
+                detail.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-600">每天</span>
+                        <input type="time" id="run-cycle-day-time" value="00:00" class="px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                        <span class="text-xs text-gray-600">执行</span>
+                    </div>
+                `;
+            } else if (unit === 'week') {
+                detail.innerHTML = `
+                    <div class="flex flex-col gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-600">每周</span>
+                            <select id="run-cycle-week-day" class="px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                                <option value="1">周一</option>
+                                <option value="2">周二</option>
+                                <option value="3">周三</option>
+                                <option value="4">周四</option>
+                                <option value="5">周五</option>
+                                <option value="6">周六</option>
+                                <option value="0">周日</option>
+                            </select>
+                            <input type="time" id="run-cycle-week-time" value="00:00" class="px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                            <span class="text-xs text-gray-600">执行</span>
+                        </div>
+                    </div>
+                `;
+            } else if (unit === 'month') {
+                detail.innerHTML = `
+                    <div class="flex flex-col gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-600">每月</span>
+                            <input type="number" id="run-cycle-month-day" min="1" max="31" value="1" class="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                            <span class="text-xs text-gray-600">日</span>
+                            <input type="time" id="run-cycle-month-time" value="00:00" class="px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-blue-500" onchange="updateCronFromUI()">
+                            <span class="text-xs text-gray-600">执行</span>
+                        </div>
+                    </div>
+                `;
+            }
+            // 自动更新 Cron 表达式
+            updateCronFromUI();
+        }
+
+        // 根据界面配置自动生成并更新 Cron 表达式
+        function updateCronFromUI() {
+            const cronInput = document.getElementById('run-cron-expression');
+            if (!cronInput) return;
+            
+            const unit = document.getElementById('run-cycle-unit').value;
+            let cron = '';
+            
+            if (unit === 'minute') {
+                const n = parseInt(document.getElementById('run-cycle-minute-n')?.value) || 5;
+                cron = `*/${n} * * * *`;
+            } else if (unit === 'hour') {
+                const n = parseInt(document.getElementById('run-cycle-hour-n')?.value) || 1;
+                const m = parseInt(document.getElementById('run-cycle-hour-minute')?.value) || 0;
+                cron = `${m} */${n} * * *`;
+            } else if (unit === 'day') {
+                const t = document.getElementById('run-cycle-day-time')?.value || '00:00';
+                const [hh, mm] = t.split(':');
+                cron = `${mm || '0'} ${hh || '0'} * * *`;
+            } else if (unit === 'week') {
+                const d = document.getElementById('run-cycle-week-day')?.value || '1';
+                const t = document.getElementById('run-cycle-week-time')?.value || '00:00';
+                const [hh, mm] = t.split(':');
+                cron = `${mm || '0'} ${hh || '0'} * * ${d}`;
+            } else if (unit === 'month') {
+                const day = parseInt(document.getElementById('run-cycle-month-day')?.value) || 1;
+                const t = document.getElementById('run-cycle-month-time')?.value || '00:00';
+                const [hh, mm] = t.split(':');
+                cron = `${mm || '0'} ${hh || '0'} ${day} * *`;
+            }
+            
+            if (cron) {
+                cronInput.value = cron;
+            }
+        }
+
+        // 用户手动输入 Cron 表达式时的处理
+        function updateCronFromManual() {
+            // 当用户手动输入时，不做任何自动更新，保持用户输入的值
+            // 这个函数主要用于标记用户已手动编辑，在确认时会优先使用手动输入的值
+        }
+
+        // 日历选择联动
+        function updateCalendarSelection() {
+            const calendarSelect = document.getElementById('run-cycle-calendar');
+            const customWrapper = document.getElementById('run-cycle-custom-calendar-wrapper');
+            if (!calendarSelect || !customWrapper) return;
+            
+            if (calendarSelect.value === 'custom') {
+                customWrapper.classList.remove('hidden');
+            } else {
+                customWrapper.classList.add('hidden');
+            }
+        }
+
+        // 延迟告警联动
+        function updateDelayAlertUI() {
+            const delayAlert = document.getElementById('run-delay-alert');
+            const delayTimeWrapper = document.getElementById('run-delay-time-wrapper');
+            if (!delayAlert || !delayTimeWrapper) return;
+            
+            if (delayAlert.checked) {
+                delayTimeWrapper.classList.remove('hidden');
+            } else {
+                delayTimeWrapper.classList.add('hidden');
+            }
+        }
+
+        // 更新延迟时间总计（可选，用于显示总秒数）
+        function updateDelayTimeTotal() {
+            // 这个函数可以用于实时计算总秒数并显示，目前先不实现
+            // 如果需要，可以在这里添加总秒数的计算和显示逻辑
+        }
+
+        // 填充周期任务详细配置值
+        function fillCycleConfigValues() {
+            const cycleConfig = runScheduleConfig.cycleConfig || {};
+            const unit = runScheduleConfig.cycleUnit || 'minute';
+            
+            if (unit === 'minute' && cycleConfig.everyNMinutes) {
+                const input = document.getElementById('run-cycle-minute-n');
+                if (input) input.value = cycleConfig.everyNMinutes;
+            } else if (unit === 'hour') {
+                if (cycleConfig.everyNHours) {
+                    const nInput = document.getElementById('run-cycle-hour-n');
+                    if (nInput) nInput.value = cycleConfig.everyNHours;
+                }
+                if (cycleConfig.minute !== undefined) {
+                    const mInput = document.getElementById('run-cycle-hour-minute');
+                    if (mInput) mInput.value = cycleConfig.minute;
+                }
+            } else if (unit === 'day' && cycleConfig.time) {
+                const input = document.getElementById('run-cycle-day-time');
+                if (input) input.value = cycleConfig.time;
+            } else if (unit === 'week') {
+                if (cycleConfig.dayOfWeek) {
+                    const dInput = document.getElementById('run-cycle-week-day');
+                    if (dInput) dInput.value = cycleConfig.dayOfWeek;
+                }
+                if (cycleConfig.time) {
+                    const tInput = document.getElementById('run-cycle-week-time');
+                    if (tInput) tInput.value = cycleConfig.time;
+                }
+            } else if (unit === 'month') {
+                if (cycleConfig.dayOfMonth) {
+                    const dInput = document.getElementById('run-cycle-month-day');
+                    if (dInput) dInput.value = cycleConfig.dayOfMonth;
+                }
+                if (cycleConfig.time) {
+                    const tInput = document.getElementById('run-cycle-month-time');
+                    if (tInput) tInput.value = cycleConfig.time;
+                }
+            }
+        }
+
+        function confirmRunWithConfig() {
+            const type = document.getElementById('run-schedule-type').value || '实时';
+            const delayAlert = document.getElementById('run-delay-alert').checked;
+            const delayHours = parseInt(document.getElementById('run-delay-hours')?.value) || 0;
+            const delayMinutes = parseInt(document.getElementById('run-delay-minutes')?.value) || 0;
+            const delaySeconds = parseInt(document.getElementById('run-delay-seconds')?.value) || 0;
+            // 计算总秒数（用于兼容和日志显示）
+            const delayTotalSeconds = delayHours * 3600 + delayMinutes * 60 + delaySeconds;
+            const stopStrategy = document.getElementById('run-stop-strategy').value || 'continue';
+            const radios = document.getElementsByName('run-once-or-cycle');
+            let mode = 'once';
+            radios.forEach(r => { if (r.checked) mode = r.value; });
+
+            let onceStartTime = '';
+            let cycleUnit = 'minute';
+            let cycleConfig = {};
+            let cron = '';
+
+            if (type === '定时') {
+                if (mode === 'once') {
+                    const dt = document.getElementById('run-once-start').value;
+                    onceStartTime = dt || '';
+                    // 一次性任务 Cron 多数系统会单独处理，这里只是占位
+                    cron = '';
+                } else {
+                    // 根据界面配置自动生成
+                    cycleUnit = document.getElementById('run-cycle-unit').value;
+                    if (cycleUnit === 'minute') {
+                        const n = parseInt(document.getElementById('run-cycle-minute-n').value) || 5;
+                        cycleConfig = { everyNMinutes: n };
+                        cron = `*/${n} * * * *`;
+                    } else if (cycleUnit === 'hour') {
+                        const n = parseInt(document.getElementById('run-cycle-hour-n').value) || 1;
+                        const m = parseInt(document.getElementById('run-cycle-hour-minute').value) || 0;
+                        cycleConfig = { everyNHours: n, minute: m };
+                        cron = `${m} */${n} * * *`;
+                    } else if (cycleUnit === 'day') {
+                        const t = document.getElementById('run-cycle-day-time').value || '00:00';
+                        const [hh, mm] = t.split(':');
+                        cycleConfig = { time: t };
+                        cron = `${mm || '0'} ${hh || '0'} * * *`;
+                    } else if (cycleUnit === 'week') {
+                        const d = document.getElementById('run-cycle-week-day').value || '1';
+                        const t = document.getElementById('run-cycle-week-time').value || '00:00';
+                        const [hh, mm] = t.split(':');
+                        cycleConfig = { dayOfWeek: d, time: t };
+                        cron = `${mm || '0'} ${hh || '0'} * * ${d}`;
+                    } else if (cycleUnit === 'month') {
+                        const day = parseInt(document.getElementById('run-cycle-month-day').value) || 1;
+                        const t = document.getElementById('run-cycle-month-time').value || '00:00';
+                        const [hh, mm] = t.split(':');
+                        cycleConfig = { dayOfMonth: day, time: t };
+                        cron = `${mm || '0'} ${hh || '0'} ${day} * *`;
+                    }
+                    
+                    // 保存有效期和日历配置
+                    const validStart = document.getElementById('run-cycle-valid-start')?.value || '';
+                    const validEnd = document.getElementById('run-cycle-valid-end')?.value || '';
+                    const calendar = document.getElementById('run-cycle-calendar')?.value || '';
+                    const customCalendar = document.getElementById('run-cycle-custom-calendar')?.value || '';
+                    
+                    cycleConfig.validStart = validStart;
+                    cycleConfig.validEnd = validEnd;
+                    cycleConfig.calendar = calendar;
+                    if (calendar === 'custom' && customCalendar) {
+                        cycleConfig.customCalendar = customCalendar;
+                    }
+                }
+            } else if (type === '定时Cron') {
+                // 定时（Cron表达式）类型，直接从输入框获取
+                cron = document.getElementById('run-cron-expression')?.value?.trim() || '';
+                cycleConfig = { manualCron: true };
+            }
+
+            runScheduleConfig = {
+                type,
+                mode,
+                cycleUnit,
+                onceStartTime,
+                cycleConfig,
+                cron,
+                delayAlert,
+                delayHours,
+                delayMinutes,
+                delaySeconds,
+                delayTotalSeconds, // 总秒数，用于兼容和日志显示
+                stopStrategy
+            };
+
+            // 先保存工作流（带上最新调度配置）
+            saveWorkflow();
+
+            closeRunConfig();
+            runWorkflow(); // 进入实际执行
+        }
+
+        // --- 功能：运行与校验 (核心业务逻辑) ---
+        async function runWorkflow() {
+            const panel = document.getElementById('console-panel');
+            const logEl = document.getElementById('log-container');
+            panel.classList.add('open');
+            logEl.innerHTML = '<div class="text-blue-400 font-bold mb-2">--- 开始全链路校验与执行 ---</div>';
+            let scheduleLine = `调度类型: ${runScheduleConfig.type || '实时'}`;
+            if (runScheduleConfig.type === '定时') {
+                scheduleLine += `，周期: ${runScheduleConfig.mode === 'once' ? '一次性任务' : '周期任务'}`;
+                if (runScheduleConfig.mode === 'once' && runScheduleConfig.onceStartTime) {
+                    scheduleLine += `，启动时间: ${runScheduleConfig.onceStartTime}`;
+                }
+                if (runScheduleConfig.mode === 'cycle') {
+                    scheduleLine += `，频率: ${runScheduleConfig.cycleUnit}`;
+                    if (runScheduleConfig.cron) {
+                        scheduleLine += `（Cron: ${runScheduleConfig.cron}）`;
+                    }
+                    // 显示有效期和日历信息
+                    const cycleConfig = runScheduleConfig.cycleConfig || {};
+                    if (cycleConfig.validStart || cycleConfig.validEnd) {
+                        const validRange = [];
+                        if (cycleConfig.validStart) validRange.push(`从 ${cycleConfig.validStart}`);
+                        if (cycleConfig.validEnd) validRange.push(`至 ${cycleConfig.validEnd}`);
+                        if (validRange.length > 0) {
+                            scheduleLine += `，有效期: ${validRange.join(' ')}`;
+                        }
+                    }
+                    if (cycleConfig.calendar) {
+                        const calendarNames = {
+                            'workday': '工作日（周一至周五）',
+                            'weekend': '周末（周六、周日）',
+                            'workday-exclude-holiday': '工作日（排除节假日）',
+                            'custom': cycleConfig.customCalendar ? `自定义日历: ${cycleConfig.customCalendar}` : '自定义日历'
+                        };
+                        scheduleLine += `，日历: ${calendarNames[cycleConfig.calendar] || cycleConfig.calendar}`;
+                    }
+                }
+            } else if (runScheduleConfig.type === '定时Cron') {
+                scheduleLine += `（Cron表达式）`;
+                if (runScheduleConfig.cron) {
+                    scheduleLine += `，Cron: ${runScheduleConfig.cron}`;
+                }
+            }
+            logEl.innerHTML += `<div class="text-xs text-gray-400 mb-1">${scheduleLine}</div>`;
+            if (runScheduleConfig.delayAlert) {
+                // 格式化延迟时间显示（小时、分钟、秒）
+                let delayTimeStr = '';
+                const hours = runScheduleConfig.delayHours || 0;
+                const minutes = runScheduleConfig.delayMinutes || 0;
+                const seconds = runScheduleConfig.delaySeconds || 0;
+                const parts = [];
+                if (hours > 0) parts.push(`${hours} 小时`);
+                if (minutes > 0) parts.push(`${minutes} 分钟`);
+                if (seconds > 0) parts.push(`${seconds} 秒`);
+                delayTimeStr = parts.length > 0 ? parts.join(' ') : '0 秒';
+                logEl.innerHTML += `<div class="text-xs text-gray-400 mb-1">延迟告警: 超过 ${delayTimeStr} 未完成将告警（模拟）</div>`;
+            }
+            logEl.innerHTML += `<div class="text-xs text-gray-400 mb-3">停止策略: ${runScheduleConfig.stopStrategy === 'failfast' ? 'Fail Fast（节点失败即中断后续）' : '不中断（只记录失败告警）'}</div>`;
+
+            // 重置状态
+            nodes.forEach(n => { n.status = 'pending'; n.result = null; });
+            render();
+
+            // 拓扑排序/层级执行模拟 (这里简化为按节点顺序)
+            // 真实场景需要根据 Edges 构建 DAG
+            
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                
+                // 1. 设置运行中
+                node.status = 'running';
+                render();
+                logEl.innerHTML += `<div class="mt-1 text-gray-400">> 调度节点: ${node.name} ...</div>`;
+                logEl.scrollTop = logEl.scrollHeight;
+
+                // 2. 模拟耗时
+                await new Promise(r => setTimeout(r, 800 + Math.random() * 1000));
+
+                // 3. 执行校验逻辑
+                const res = simulateValidation(node);
+                node.result = res;
+                node.status = res.pass ? 'success' : 'fail';
+                
+                // 4. 写日志
+                const icon = res.pass ? '<i class="fas fa-check text-green-500"></i>' : '<i class="fas fa-times text-red-500"></i>';
+                const color = res.pass ? 'text-green-400' : 'text-red-400';
+                logEl.innerHTML += `<div class="${color} ml-4 text-sm">${icon} ${res.msg}</div>`;
+                if (!res.pass) {
+                    logEl.innerHTML += `<div class="text-gray-500 text-xs ml-8 mb-2">Error Detail: ${res.detail}</div>`;
+
+                    // Fail Fast 策略：节点失败时立即中断后续执行
+                    if (runScheduleConfig.stopStrategy === 'failfast') {
+                        logEl.innerHTML += '<div class="text-red-400 text-xs ml-4 mt-1">Fail Fast: 检测到失败节点，已中断后续节点执行。</div>';
+                        render();
+                        break;
+                    }
+                }
+
+                render();
+            }
+            logEl.innerHTML += '<div class="text-gray-500 mt-4">--- 执行结束 ---</div>';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function simulateValidation(node) {
+            // 随机模拟：20% 概率触发校验失败
+            const isOk = Math.random() > 0.2;
+            
+            if (node.type === 'exchange') {
+                const stats = { rowCount: 1500000, checksum: 'abc123', consistency: 99.8 };
+                return isOk 
+                    ? { pass: true, msg: `✓ 行数一致性校验通过 (${stats.rowCount} 行)`, detail: JSON.stringify(stats) }
+                    : { pass: false, msg: '✗ 源表与目标表行数不一致', detail: 'Target has 1500050 rows, Source has 1500000 rows' };
+            } else if (node.type === 'etl') {
+                const stats = { totalRows: 2000000, dirtyRows: 5420, cleanRate: 99.73 };
+                return isOk
+                    ? { pass: true, msg: `✓ 可视化ETL执行成功 (脏数据率 ${100-stats.cleanRate}%)`, detail: JSON.stringify(stats) }
+                    : { pass: false, msg: '✗ 可视化ETL处理过程中发现异常数据', detail: 'Found null values exceeding threshold in columns: user_id, email' };
+            } else if (node.type === 'dqc') {
+                const cfg = getDqcConfig(node);
+                const stats = {
+                    nullRate: +(Math.random() * 3).toFixed(2),
+                    volatility: +(Math.random() * 5).toFixed(2),
+                    uniqRate: +(90 + Math.random() * 10).toFixed(2),
+                    anomalyRate: +(Math.random() * 2).toFixed(2),
+                    samplePercent: cfg.samplePercent,
+                    windowSize: cfg.windowSize
+                };
+                const failures = [];
+                if (cfg.enableNull && stats.nullRate > cfg.nullThreshold) {
+                    failures.push(`空值率 ${stats.nullRate}% > 阈值 ${cfg.nullThreshold}%`);
+                }
+                if (cfg.enableVolatility && stats.volatility > cfg.volatilityThreshold) {
+                    failures.push(`波动率 ${stats.volatility}% > 阈值 ${cfg.volatilityThreshold}%`);
+                }
+                if (cfg.enableUniq && stats.uniqRate < cfg.uniqThreshold) {
+                    failures.push(`唯一率 ${stats.uniqRate}% < 下限 ${cfg.uniqThreshold}%`);
+                }
+                if (cfg.enableAnomaly && stats.anomalyRate > cfg.anomalyThreshold) {
+                    failures.push(`异常占比 ${stats.anomalyRate}% > 阈值 ${cfg.anomalyThreshold}%`);
+                }
+                const pass = failures.length === 0;
+                const msg = pass
+                    ? `✓ 数据质检通过 (空值${stats.nullRate}%, 唯一率${stats.uniqRate}%)`
+                    : `✗ 数据质检未通过: ${failures[0]}`;
+                return { pass, msg, detail: JSON.stringify({ cfg, stats, failures }) };
+            } else if (node.type === 'sql') {
+                const stats = { syntax: 'valid', executionTime: '245ms', rowsAffected: 587432, performance: 'excellent' };
+                return isOk
+                    ? { pass: true, msg: `✓ SQL文件校验通过 (耗时 ${stats.executionTime})`, detail: JSON.stringify(stats) }
+                    : { pass: false, msg: '✗ SQL文件执行失败', detail: 'Syntax error near line 15: unexpected token "FROM"' };
+            }
+            
+            return { pass: false, msg: '✗ 未知节点类型', detail: `Node type: ${node.type}` };
+        }
+
+        // --- 功能：查看校验结果 ---
+        function viewResult() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node || !node.result) return alert('该节点暂无执行结果');
+            
+            const modal = document.getElementById('res-modal');
+            const viewer = document.getElementById('json-viewer');
+            modal.classList.remove('hidden');
+            
+            // 格式化 JSON 显示
+            try {
+                const data = typeof node.result.detail === 'string' ? JSON.parse(node.result.detail) : node.result.detail;
+                viewer.innerHTML = JSON.stringify(data, null, 2);
+            } catch(e) {
+                viewer.innerHTML = node.result.detail || 'No detail available';
+            }
+            
+            // 语法高亮 (简单实现)
+            highlightJSON(viewer);
+            hideContextMenu();
+        }
+
+        function viewExchangeResult() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node || node.type !== 'exchange') {
+                alert('仅数据交换节点可查看结果');
+                return;
+            }
+            const modal = document.getElementById('exchange-modal');
+            const metaEl = document.getElementById('exchange-meta');
+            const statsEl = document.getElementById('exchange-stats');
+            const headEl = document.getElementById('exchange-sample-head');
+            const bodyEl = document.getElementById('exchange-sample-body');
+
+            // 生成模拟数据
+            const rowCount = 100000 + Math.floor(Math.random() * 50000);
+            const dataSizeMB = (rowCount * (0.15 + Math.random() * 0.1)).toFixed(1);
+            const sample = [
+                { id: 1, user: 'alice', amount: 123.45, ts: '2024-08-01 12:00:00' },
+                { id: 2, user: 'bob', amount: 67.89, ts: '2024-08-01 12:05:00' },
+                { id: 3, user: 'carol', amount: 301.22, ts: '2024-08-01 12:10:00' },
+                { id: 4, user: 'david', amount: 88.00, ts: '2024-08-01 12:15:00' },
+                { id: 5, user: 'erin', amount: 45.67, ts: '2024-08-01 12:20:00' }
+            ];
+            const fields = Object.keys(sample[0] || {});
+
+            metaEl.innerText = `源: SourceTableA → 目标: TargetTableB`;
+            statsEl.innerHTML = `
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="p-3 bg-blue-50 border border-blue-100 rounded">
+                        <div class="text-[11px] text-blue-500 uppercase font-bold mb-1">行数</div>
+                        <div class="text-lg font-bold text-slate-800">${rowCount.toLocaleString()}</div>
+                    </div>
+                    <div class="p-3 bg-emerald-50 border border-emerald-100 rounded">
+                        <div class="text-[11px] text-emerald-500 uppercase font-bold mb-1">数据量</div>
+                        <div class="text-lg font-bold text-slate-800">${dataSizeMB} MB</div>
+                    </div>
+                    <div class="p-3 bg-amber-50 border border-amber-100 rounded">
+                        <div class="text-[11px] text-amber-500 uppercase font-bold mb-1">抽样</div>
+                        <div class="text-lg font-bold text-slate-800">5 行</div>
+                    </div>
+                </div>
+            `;
+
+            headEl.innerHTML = `<tr>${fields.map(f => `<th class="px-3 py-2 border-b">${f}</th>`).join('')}</tr>`;
+            bodyEl.innerHTML = sample.map(row => {
+                return `<tr>${fields.map(f => `<td class="px-3 py-2 text-gray-700">${row[f]}</td>`).join('')}</tr>`;
+            }).join('');
+
+            modal.classList.remove('hidden');
+            hideContextMenu();
+        }
+
+        function closeExchangeResult() {
+            document.getElementById('exchange-modal').classList.add('hidden');
+        }
+
+        // --- 功能：ETL 结果预览 ---
+        let etlResultData = { rows: [], page: 1, pageSize: 500 };
+
+        function viewEtlResult() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node || node.type !== 'etl') {
+                alert('仅 ETL 节点可查看结果');
+                return;
+            }
+
+            // 生成模拟数据（1200 行）
+            etlResultData.page = 1;
+            etlResultData.pageSize = 500;
+            etlResultData.rows = Array.from({ length: 1200 }).map((_, i) => ({
+                id: i + 1,
+                name: `user_${(i + 1).toString().padStart(4, '0')}`,
+                amount: +(Math.random() * 500).toFixed(2),
+                status: Math.random() > 0.9 ? 'abnormal' : 'ok',
+                ts: `2024-08-01 12:${(i % 60).toString().padStart(2, '0')}:00`
+            }));
+
+            const modal = document.getElementById('etl-modal');
+            const metaEl = document.getElementById('etl-meta');
+            const statsEl = document.getElementById('etl-stats');
+
+            metaEl.innerText = `任务: ${node.name || 'ETL任务'} · 输出表: ods_user_clean`;
+            statsEl.innerHTML = `
+                <div class="p-3 bg-blue-50 border border-blue-100 rounded">
+                    <div class="text-[11px] text-blue-500 uppercase font-bold mb-1">总行数</div>
+                    <div class="text-lg font-bold text-slate-800">${etlResultData.rows.length.toLocaleString()}</div>
+                </div>
+                <div class="p-3 bg-emerald-50 border border-emerald-100 rounded">
+                    <div class="text-[11px] text-emerald-500 uppercase font-bold mb-1">样本显示</div>
+                    <div class="text-lg font-bold text-slate-800">每页 ${etlResultData.pageSize} 条</div>
+                </div>
+                <div class="p-3 bg-amber-50 border border-amber-100 rounded">
+                    <div class="text-[11px] text-amber-500 uppercase font-bold mb-1">异常率</div>
+                    <div class="text-lg font-bold text-slate-800">${calcEtlAnomalyRate()}%</div>
+                </div>
+            `;
+
+            renderEtlTable();
+            modal.classList.remove('hidden');
+            hideContextMenu();
+        }
+
+        function renderEtlTable() {
+            const headEl = document.getElementById('etl-sample-head');
+            const bodyEl = document.getElementById('etl-sample-body');
+            const pageInfo = document.getElementById('etl-page-info');
+            const { rows, page, pageSize } = etlResultData;
+            const start = (page - 1) * pageSize;
+            const end = Math.min(rows.length, start + pageSize);
+            const pageRows = rows.slice(start, end);
+
+            const fields = ['id', 'name', 'amount', 'status', 'ts'];
+            headEl.innerHTML = `<tr>${fields.map(f => `<th class="px-3 py-2 border-b">${f}</th>`).join('')}</tr>`;
+            bodyEl.innerHTML = pageRows.map(r => `
+                <tr>
+                    <td class="px-3 py-2 text-gray-700">${r.id}</td>
+                    <td class="px-3 py-2 text-gray-700">${r.name}</td>
+                    <td class="px-3 py-2 text-gray-700">${r.amount}</td>
+                    <td class="px-3 py-2 ${r.status === 'abnormal' ? 'text-red-500' : 'text-gray-700'}">${r.status}</td>
+                    <td class="px-3 py-2 text-gray-700">${r.ts}</td>
+                </tr>
+            `).join('');
+
+            const totalPages = Math.ceil(rows.length / pageSize);
+            pageInfo.innerText = `第 ${page} / ${totalPages} 页（共 ${rows.length.toLocaleString()} 条）`;
+            document.getElementById('etl-prev').disabled = page <= 1;
+            document.getElementById('etl-next').disabled = page >= totalPages;
+        }
+
+        function changeEtlPage(delta) {
+            const totalPages = Math.ceil(etlResultData.rows.length / etlResultData.pageSize);
+            let next = etlResultData.page + delta;
+            if (next < 1) next = 1;
+            if (next > totalPages) next = totalPages;
+            etlResultData.page = next;
+            renderEtlTable();
+        }
+
+        function calcEtlAnomalyRate() {
+            if (!etlResultData.rows.length) return '0.00';
+            const abnormal = etlResultData.rows.filter(r => r.status === 'abnormal').length;
+            return ((abnormal / etlResultData.rows.length) * 100).toFixed(2);
+        }
+
+        function closeEtlResult() {
+            document.getElementById('etl-modal').classList.add('hidden');
+        }
+
+        // --- 质检任务搜索 ---
+        const dqcTaskList = [
+            { name: '空值率巡检', desc: '每日检查核心表空值率' },
+            { name: '交易异常波动', desc: '近7天交易额波动监控' },
+            { name: '用户画像唯一性', desc: '唯一键冲突与重复行检测' },
+            { name: '日志异常占比', desc: '异常日志占比统计' },
+            { name: '埋点完整性', desc: '埋点字段缺失与枚举校验' }
+        ];
+        let currentDqcTaskList = [...dqcTaskList];
+
+        function showDqcTaskDropdown() {
+            renderDqcTaskDropdown();
+            document.getElementById('dqc-task-dropdown').classList.remove('hidden');
+        }
+
+        function filterDqcTaskList() {
+            const val = document.getElementById('dqc-task-search').value.toLowerCase();
+            if (!val) {
+                currentDqcTaskList = [...dqcTaskList];
+            } else {
+                currentDqcTaskList = dqcTaskList.filter(t =>
+                    t.name.toLowerCase().includes(val) || t.desc.toLowerCase().includes(val)
+                );
+            }
+            renderDqcTaskDropdown();
+        }
+
+        function renderDqcTaskDropdown() {
+            const dropdown = document.getElementById('dqc-task-dropdown');
+            if (!dropdown) return;
+            if (currentDqcTaskList.length === 0) {
+                dropdown.innerHTML = '<div class="p-2 text-xs text-gray-500 text-center">未找到匹配的任务</div>';
+                return;
+            }
+            dropdown.innerHTML = currentDqcTaskList.map(task => `
+                <div onclick="selectDqcTask('${task.name}')" class="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0">
+                    <div class="text-sm font-medium text-gray-700">${task.name}</div>
+                    <div class="text-xs text-gray-500 mt-0.5">${task.desc}</div>
+                </div>
+            `).join('');
+        }
+
+        function selectDqcTask(name) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.dqcTaskName = name;
+                document.getElementById('dqc-task-search').value = name;
+                document.getElementById('dqc-task-dropdown').classList.add('hidden');
+            }
+        }
+
+        // --- 快捷键：Delete/Backspace 删除选中节点 ---
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                const tag = (e.target && e.target.tagName) || '';
+                if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || (e.target && e.target.isContentEditable)) return;
+                if (selectedNodeId) {
+                    e.preventDefault();
+                    deleteNode();
+                }
+            }
+        });
+
+        function highlightJSON(el) {
+            let html = el.innerHTML;
+            html = html.replace(/&lt;|</g, '&lt;').replace(/&gt;|>/g, '&gt;');
+            html = html.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
+                let cls = 'json-num';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) cls = 'json-key';
+                    else cls = 'json-str';
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-bool';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+            el.innerHTML = html;
+        }
+
+        function closeResult() {
+            document.getElementById('res-modal').classList.add('hidden');
+        }
+
+        // --- 功能：上下文菜单 ---
+        function showContextMenu(e, nodeId) {
+            e.preventDefault();
+            selectedNodeId = nodeId;
+            const ctx = document.getElementById('ctx-menu');
+            ctx.classList.remove('hidden');
+            ctx.style.left = e.clientX + 'px';
+            ctx.style.top = e.clientY + 'px';
+            const node = nodes.find(n => n.id === nodeId);
+            const btnExchange = document.getElementById('btn-view-exchange');
+            const btnEtl = document.getElementById('btn-view-etl');
+            const btnRes = document.getElementById('btn-view-res');
+            if (btnExchange) {
+                btnExchange.classList.toggle('hidden', !(node && node.type === 'exchange'));
+            }
+            if (btnEtl) {
+                btnEtl.classList.toggle('hidden', !(node && node.type === 'etl'));
+            }
+            if (btnRes) {
+                // 可视化ETL节点不显示校验报告入口
+                btnRes.classList.toggle('hidden', !!(node && node.type === 'etl'));
+            }
+        }
+
+        function hideContextMenu() {
+            document.getElementById('ctx-menu').classList.add('hidden');
+        }
+
+        // --- 功能：删除节点 ---
+        function deleteNode() {
+            if (!selectedNodeId) return;
+            nodes = nodes.filter(n => n.id !== selectedNodeId);
+            edges = edges.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId);
+            selectedNodeId = null;
+            closeSettings();
+            render();
+            hideContextMenu();
+        }
+
+        // --- 功能：右侧设置面板 ---
+        function openSettings(node) {
+            const panel = document.getElementById('settings-panel');
+            panel.classList.remove('hidden');
+            
+            // 填充表单数据
+            document.getElementById('node-name').value = node.name || '';
+            document.getElementById('node-id').innerText = node.id;
+            document.getElementById('task-search').value = node.taskName || '';
+            
+            const meta = getNodeMeta(node.type);
+            document.getElementById('node-type').innerText = meta.zh || '未知';
+            
+            // 只有数据交换类型才显示任务类型和数据校验选择
+            const taskTypeSection = document.getElementById('task-type-section');
+            const dataValidationSection = document.getElementById('data-validation-section');
+            const taskNameSection = document.getElementById('task-name-section');
+            const dqcSection = document.getElementById('dqc-section');
+            
+            // 默认隐藏所有专项配置
+            taskTypeSection.classList.add('hidden');
+            dataValidationSection.classList.add('hidden');
+            dqcSection.classList.add('hidden');
+            taskNameSection.classList.add('hidden');
+            
+            if (node.type === 'exchange') {
+                taskTypeSection.classList.remove('hidden');
+                dataValidationSection.classList.remove('hidden');
+                taskNameSection.classList.remove('hidden');
+                document.getElementById('task-type-select').value = node.taskType || '';
+                
+                // 填充数据校验配置
+                document.getElementById('enable-data-validation').checked = node.enableDataValidation || false;
+                document.getElementById('validation-method').value = node.validationMethod || '';
+                document.getElementById('sampling-ratio-slider').value = node.samplingRatio || 10;
+                document.getElementById('sampling-ratio-display').innerText = (node.samplingRatio || 10) + '%';
+                
+                // 根据校验状态显示/隐藏校验方式
+                const validationMethodSection = document.getElementById('validation-method-section');
+                if (node.enableDataValidation) {
+                    validationMethodSection.classList.remove('hidden');
+                } else {
+                    validationMethodSection.classList.add('hidden');
+                }
+                
+                // 根据校验方式显示/隐藏抽样比例 & 字段对比
+                updateValidationDependentUI(node);
+                renderSourceTables(node);
+                renderComparisonFields(node);
+            } else if (node.type === 'dqc') {
+                dqcSection.classList.remove('hidden');
+                document.getElementById('dqc-task-search').value = node.dqcTaskName || '';
+            }
+            
+            document.getElementById('node-timeout').value = node.timeout || '300';
+            document.getElementById('node-retry').value = node.retry || '0';
+            document.getElementById('node-desc').value = node.desc || '';
+            document.getElementById('alert-on-fail').checked = node.alertOnFail || false;
+            document.getElementById('alert-on-slow').checked = node.alertOnSlow || false;
+            
+            // 加载任务列表
+            loadTaskList();
+        }
+
+        function contextMenuSettings() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                openSettings(node);
+                hideContextMenu();
+            }
+        }
+
+        function closeSettings() {
+            document.getElementById('settings-panel').classList.add('hidden');
+        }
+
+        function updateNodeName() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.name = document.getElementById('node-name').value || `${node.type.toUpperCase()}_Task`;
+                render();
+            }
+        }
+
+        function updateNodeTimeout() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.timeout = parseInt(document.getElementById('node-timeout').value) || 300;
+            }
+        }
+
+        function updateNodeRetry() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.retry = parseInt(document.getElementById('node-retry').value) || 0;
+            }
+        }
+
+        function updateNodeDesc() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.desc = document.getElementById('node-desc').value;
+            }
+        }
+
+        function updateNodeAlert() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.alertOnFail = document.getElementById('alert-on-fail').checked;
+                node.alertOnSlow = document.getElementById('alert-on-slow').checked;
+            }
+        }
+
+        function updateTaskType() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.taskType = document.getElementById('task-type-select').value;
+                // 确保任务名称选择区域始终显示（对于数据交换节点）
+                if (node.type === 'exchange') {
+                    const taskNameSection = document.getElementById('task-name-section');
+                    if (taskNameSection) {
+                        taskNameSection.classList.remove('hidden');
+                    }
+                }
+            }
+        }
+
+        function toggleDataValidation() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.enableDataValidation = document.getElementById('enable-data-validation').checked;
+                
+                // 显示/隐藏校验方式选择
+                const validationMethodSection = document.getElementById('validation-method-section');
+                if (node.enableDataValidation) {
+                    validationMethodSection.classList.remove('hidden');
+                } else {
+                    validationMethodSection.classList.add('hidden');
+                    node.validationMethod = '';
+                    node.fieldComparisonSources = [];
+                    node.comparisonFields = [];
+                }
+                updateValidationDependentUI(node);
+            }
+        }
+
+        function updateValidationMethod() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.validationMethod = document.getElementById('validation-method').value;
+                updateValidationDependentUI(node);
+            }
+        }
+
+        function updateSamplingRatio() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                const ratio = document.getElementById('sampling-ratio-slider').value;
+                node.samplingRatio = parseInt(ratio);
+                document.getElementById('sampling-ratio-display').innerText = ratio + '%';
+            }
+        }
+
+        // --- 校验方式联动UI ---
+        function updateValidationDependentUI(node) {
+                const samplingRatioSection = document.getElementById('sampling-ratio-section');
+            const fieldComparisonSection = document.getElementById('field-comparison-section');
+            const comparisonFieldsSection = document.getElementById('comparison-fields-section');
+
+                if (node.validationMethod === '抽样对比') {
+                    samplingRatioSection.classList.remove('hidden');
+                } else {
+                    samplingRatioSection.classList.add('hidden');
+                }
+
+            if (node.validationMethod === '字段对比') {
+                fieldComparisonSection.classList.remove('hidden');
+                // 只有选择了来源表才显示字段配置
+                if (node.fieldComparisonSources && node.fieldComparisonSources.length > 0) {
+                    comparisonFieldsSection.classList.remove('hidden');
+                } else {
+                    comparisonFieldsSection.classList.add('hidden');
+                }
+            } else {
+                fieldComparisonSection.classList.add('hidden');
+                comparisonFieldsSection.classList.add('hidden');
+            }
+        }
+
+        // --- DQC 配置 ---
+        function getDqcConfig(node) {
+            const defaults = {
+                enableNull: true,
+                nullThreshold: 1,
+                enableVolatility: true,
+                volatilityThreshold: 3,
+                enableUniq: true,
+                uniqThreshold: 95,
+                enableAnomaly: true,
+                anomalyThreshold: 1,
+                samplePercent: 10,
+                windowSize: 5000
+            };
+            node.dqcConfig = { ...defaults, ...(node.dqcConfig || {}) };
+            return node.dqcConfig;
+        }
+
+        function toggleDqcConfig(key) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+            const cfg = getDqcConfig(node);
+            const map = {
+                enableNull: 'dqc-null-enable',
+                enableVolatility: 'dqc-volatility-enable',
+                enableUniq: 'dqc-uniq-enable',
+                enableAnomaly: 'dqc-anomaly-enable'
+            };
+            const elId = map[key];
+            if (!elId) return;
+            cfg[key] = document.getElementById(elId).checked;
+        }
+
+        function updateDqcNumber(key, value) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+            const cfg = getDqcConfig(node);
+            const num = parseFloat(value);
+            if (!isNaN(num)) {
+                cfg[key] = num;
+            }
+        }
+
+        function updateDqcSample() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+            const cfg = getDqcConfig(node);
+            const val = parseInt(document.getElementById('dqc-sample-slider').value) || 10;
+            cfg.samplePercent = val;
+            document.getElementById('dqc-sample-display').innerText = val + '%';
+        }
+
+        // --- 来源表 & 字段对比配置 ---
+        function renderSourceTables(node) {
+            const container = document.getElementById('source-table-options');
+            const selectedContainer = document.getElementById('selected-source-tables');
+            if (!container || !selectedContainer) return;
+
+            container.innerHTML = tableOptions.map(t => {
+                const checked = node.fieldComparisonSources?.includes(t.id) ? 'checked' : '';
+                return `
+                    <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                        <input type="checkbox" value="${t.id}" ${checked} onchange="toggleSourceTable('${t.id}')" class="w-4 h-4 rounded border-gray-300">
+                        <span>${t.name}</span>
+                    </label>
+                `;
+            }).join('');
+
+            if (node.fieldComparisonSources && node.fieldComparisonSources.length > 0) {
+                const chips = node.fieldComparisonSources.map(id => {
+                    const table = tableOptions.find(t => t.id === id);
+                    const name = table ? table.name : id;
+                    return `<span class="px-2 py-1 bg-blue-50 text-blue-600 text-[11px] rounded-full border border-blue-100">${name}</span>`;
+                }).join('');
+                selectedContainer.innerHTML = chips;
+            } else {
+                selectedContainer.innerHTML = '<span class="text-[11px] text-gray-400">尚未选择来源表</span>';
+            }
+
+            updateValidationDependentUI(node);
+        }
+
+        function toggleSourceTable(tableId) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+
+            node.fieldComparisonSources = node.fieldComparisonSources || [];
+            if (node.fieldComparisonSources.includes(tableId)) {
+                node.fieldComparisonSources = node.fieldComparisonSources.filter(id => id !== tableId);
+                // 同步移除使用了该表的字段配置
+                node.comparisonFields = (node.comparisonFields || []).filter(f => f.sourceTable !== tableId);
+            } else {
+                node.fieldComparisonSources.push(tableId);
+            }
+            renderSourceTables(node);
+            renderComparisonFields(node);
+        }
+
+        function renderComparisonFields(node) {
+            const list = document.getElementById('comparison-fields-list');
+            const section = document.getElementById('comparison-fields-section');
+            if (!list || !section) return;
+
+            const hasSource = node.fieldComparisonSources && node.fieldComparisonSources.length > 0;
+            if (!hasSource) {
+                section.classList.add('hidden');
+                list.innerHTML = '';
+                return;
+            }
+
+            section.classList.remove('hidden');
+            node.comparisonFields = node.comparisonFields || [];
+
+            if (node.comparisonFields.length === 0) {
+                list.innerHTML = '<div class="text-[12px] text-gray-500">尚未添加对比字段，点击下方“添加字段”开始配置。</div>';
+                return;
+            }
+
+            list.innerHTML = node.comparisonFields.map(f => {
+                const options = node.fieldComparisonSources.map(id => {
+                    const table = tableOptions.find(t => t.id === id);
+                    const name = table ? table.name : id;
+                    const selected = f.sourceTable === id ? 'selected' : '';
+                    return `<option value="${id}" ${selected}>${name}</option>`;
+                }).join('');
+                return `
+                    <div class="flex items-center gap-2 border border-gray-100 rounded px-2 py-2">
+                        <select class="px-2 py-1 border border-gray-200 rounded text-sm flex-1" onchange="updateComparisonField('${f.id}', 'sourceTable', this.value)">
+                            ${options}
+                        </select>
+                        <input type="text" class="px-2 py-1 border border-gray-200 rounded text-sm flex-1" placeholder="源字段" value="${f.sourceField || ''}" onchange="updateComparisonField('${f.id}', 'sourceField', this.value)">
+                        <input type="text" class="px-2 py-1 border border-gray-200 rounded text-sm flex-1" placeholder="目标字段" value="${f.targetField || ''}" onchange="updateComparisonField('${f.id}', 'targetField', this.value)">
+                        <button class="text-red-500 hover:text-red-600 px-2" title="删除" onclick="removeComparisonField('${f.id}')"><i class="fas fa-trash-alt"></i></button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function addComparisonField() {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+
+            if (!node.fieldComparisonSources || node.fieldComparisonSources.length === 0) {
+                alert('请先选择至少 1 张来源表');
+                return;
+            }
+
+            const defaultTable = node.fieldComparisonSources[0];
+            node.comparisonFields = node.comparisonFields || [];
+            node.comparisonFields.push({
+                id: `cf_${Date.now()}_${Math.random().toString(16).slice(2,6)}`,
+                sourceTable: defaultTable,
+                sourceField: '',
+                targetField: ''
+            });
+            renderComparisonFields(node);
+        }
+
+        function updateComparisonField(fieldId, key, value) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+            node.comparisonFields = node.comparisonFields || [];
+            const field = node.comparisonFields.find(f => f.id === fieldId);
+            if (!field) return;
+            field[key] = value;
+        }
+
+        function removeComparisonField(fieldId) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (!node) return;
+            node.comparisonFields = (node.comparisonFields || []).filter(f => f.id !== fieldId);
+            renderComparisonFields(node);
+        }
+
+        // --- 功能：任务列表搜索 ---
+        const mockTaskList = [
+            { name: '用户数据导入', desc: 'Import user data from source' },
+            { name: '用户标签计算', desc: 'Calculate user tags' },
+            { name: '数据去重', desc: 'Remove duplicate records' },
+            { name: '可视化ETL', desc: 'Visual ETL and data transformation' },
+            { name: '空值处理', desc: 'Handle null values' },
+            { name: '数据质检', desc: 'Data quality check' },
+            { name: '异常检测', desc: 'Anomaly detection' },
+            { name: 'SQL查询', desc: 'Execute SQL query' },
+            { name: 'SQL验证', desc: 'Validate SQL syntax' },
+            { name: '交易数据同步', desc: 'Sync transaction data' }
+        ];
+        let currentTaskList = [...mockTaskList];
+
+        function loadTaskList() {
+            currentTaskList = [...mockTaskList];
+            showTaskDropdown();
+        }
+
+        function filterTaskList() {
+            const searchVal = document.getElementById('task-search').value.toLowerCase();
+            if (!searchVal) {
+                currentTaskList = [...mockTaskList];
+            } else {
+                currentTaskList = mockTaskList.filter(t => 
+                    t.name.toLowerCase().includes(searchVal) || 
+                    t.desc.toLowerCase().includes(searchVal)
+                );
+            }
+            showTaskDropdown();
+        }
+
+        function showTaskDropdown() {
+            const dropdown = document.getElementById('task-dropdown');
+            if (currentTaskList.length === 0) {
+                dropdown.innerHTML = '<div class="p-2 text-xs text-gray-500 text-center">未找到匹配的任务</div>';
+            } else {
+                dropdown.innerHTML = currentTaskList.map(task => `
+                    <div onclick="selectTask('${task.name}')" class="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0">
+                        <div class="text-sm font-medium text-gray-700">${task.name}</div>
+                        <div class="text-xs text-gray-500 mt-0.5">${task.desc}</div>
+                    </div>
+                `).join('');
+            }
+            dropdown.classList.remove('hidden');
+        }
+
+        function selectTask(taskName) {
+            if (!selectedNodeId) return;
+            const node = nodes.find(n => n.id === selectedNodeId);
+            if (node) {
+                node.taskName = taskName;
+                document.getElementById('task-search').value = taskName;
+                document.getElementById('task-dropdown').classList.add('hidden');
+            }
+        }
+
+        // 点击外部关闭下拉框（任务 & 质检任务）
+        document.addEventListener('click', (e) => {
+            // 任务名称
+            const dropdown = document.getElementById('task-dropdown');
+            const searchInput = document.getElementById('task-search');
+            if (dropdown && searchInput && e.target !== searchInput && !dropdown.contains(e.target) && !searchInput.contains(e.target)) {
+                dropdown.classList.add('hidden');
+            }
+            // 质检任务
+            const dqcDropdown = document.getElementById('dqc-task-dropdown');
+            const dqcInput = document.getElementById('dqc-task-search');
+            if (dqcDropdown && dqcInput && e.target !== dqcInput && !dqcDropdown.contains(e.target) && !dqcInput.contains(e.target)) {
+                dqcDropdown.classList.add('hidden');
+            }
+        });
+
+        // --- 初始化 ---
+        init();
+    </script>
+    </div>
+</body>
+</html>

@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工作流控制台 - V13.0 Final</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f1f5f9; }
+        .trend-bar { transition: height 0.3s, opacity 0.2s; }
+        .trend-bar:hover { opacity: 0.8; }
+        .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+        .badge-success { background: #dcfce7; color: #15803d; }
+        .badge-fail { background: #fee2e2; color: #b91c1c; }
+        .badge-running { background: #dbeafe; color: #1d4ed8; }
+        .badge-pending { background: #f1f5f9; color: #64748b; }
+        
+        /* 模态框动画 */
+        .modal-enter { opacity: 0; transform: scale(0.95); pointer-events: none; transition: all 0.2s; }
+        .modal-active { opacity: 1; transform: scale(1); pointer-events: auto; }
+    </style>
+</head>
+<body class="text-slate-800">
+    <div>
+        <nav class="bg-slate-900 text-white h-16 flex items-center justify-between px-8 shadow-lg sticky top-0 z-30">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center font-bold text-lg shadow-blue-500/50 shadow-lg">D</div>
+            <span class="font-bold text-lg tracking-wide">DataStudio <span class="text-slate-400 text-xs font-normal ml-1">V13.0 Integrated</span></span>
+        </div>
+            <div class="flex gap-4 text-sm text-slate-300">
+                <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div> 调度中心正常</div>
+            </div>
+        </nav>
+
+        <div class="max-w-7xl mx-auto p-8">
+        <div class="flex justify-between items-end mb-6">
+            <div>
+                <h2 class="text-2xl font-bold text-slate-800">任务计划列表</h2>
+                <p class="text-slate-500 text-sm mt-1">管理所有任务计划的调度与执行</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="bg-white p-1 rounded-lg border shadow-sm flex">
+                    <button onclick="switchView('card')" id="btn-card" class="px-3 py-1.5 rounded text-sm transition bg-blue-50 text-blue-600"><i class="fas fa-th-large"></i></button>
+                    <button onclick="switchView('list')" id="btn-list" class="px-3 py-1.5 rounded text-sm transition text-slate-500 hover:text-slate-700"><i class="fas fa-list"></i></button>
+                </div>
+                <div class="h-8 w-px bg-slate-300 mx-1"></div>
+                <button onclick="createNew()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow-lg shadow-blue-600/20 text-sm font-medium flex items-center gap-2 transition transform hover:-translate-y-0.5">
+                    <i class="fas fa-plus"></i> 新建工作流
+                </button>
+            </div>
+        </div>
+
+        <div id="content-container" class="min-h-[300px]"></div>
+    </div>
+
+    <!-- 新建工作流弹窗 -->
+    <div id="create-modal-bg" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm transition-opacity" onclick="closeCreateModal()"></div>
+    <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-enter p-4">
+        <div class="bg-white w-full max-w-md rounded-xl shadow-2xl flex flex-col" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="font-bold text-lg text-slate-800">新建任务计划</h3>
+                <button onclick="closeCreateModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 transition text-slate-500"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6">
+                <div class="mb-4">
+                    <label class="block text-sm font-bold text-slate-700 mb-2">任务计划名称</label>
+                    <input type="text" id="new-workflow-name" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="请输入任务计划名称">
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t bg-slate-50 flex justify-end gap-3 rounded-b-xl">
+                <button onclick="closeCreateModal()" class="px-4 py-2 text-sm rounded border border-slate-300 text-slate-600 hover:bg-slate-50">取消</button>
+                <button onclick="confirmCreate()" class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">确认创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="monitor-modal-bg" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm transition-opacity" onclick="closeMonitor()"></div>
+    <div id="monitor-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-enter p-4">
+        <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh]" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <div>
+                    <h3 class="font-bold text-lg text-slate-800" id="m-title">任务监控</h3>
+                    <div class="text-xs text-slate-500 font-mono mt-0.5" id="m-id">ID: --</div>
+                </div>
+                <button onclick="closeMonitor()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 transition text-slate-500"><i class="fas fa-times"></i></button>
+            </div>
+            
+            <div class="p-6 overflow-y-auto">
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <div class="bg-blue-50 p-4 rounded-lg border border-blue-100 text-center">
+                        <div class="text-xs text-blue-500 uppercase font-bold mb-1">健康度 (近7天)</div>
+                        <div class="text-3xl font-bold text-slate-800" id="m-rate">--%</div>
+                    </div>
+                    <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                        <div class="text-xs text-slate-500 uppercase font-bold mb-1">平均耗时</div>
+                        <div class="text-3xl font-bold text-slate-800" id="m-duration">--s</div>
+                    </div>
+                    <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                        <div class="text-xs text-slate-500 uppercase font-bold mb-1">下次调度</div>
+                        <div class="text-xl font-bold text-slate-800 mt-1">19:00:00</div>
+                    </div>
+                </div>
+
+                <div class="mb-6">
+                    <div class="flex justify-between items-center mb-3">
+                        <h4 class="text-sm font-bold text-slate-700">运行趋势 (近30次)</h4>
+                        <div class="flex gap-2 text-xs">
+                            <span class="flex items-center gap-1"><span class="w-2 h-2 bg-blue-400 rounded-sm"></span>成功</span>
+                            <span class="flex items-center gap-1"><span class="w-2 h-2 bg-red-400 rounded-sm"></span>失败</span>
+                        </div>
+                    </div>
+                    <div class="h-32 bg-slate-50 border rounded-lg p-4 flex items-end justify-between gap-1" id="m-chart"></div>
+                </div>
+
+                <div>
+                    <h4 class="text-sm font-bold text-slate-700 mb-3">最近执行记录</h4>
+                    <div class="border rounded-lg overflow-hidden">
+                        <table class="w-full text-sm text-left">
+                            <thead class="bg-slate-50 text-slate-500 font-medium border-b">
+                                <tr><th class="px-4 py-2">状态</th><th class="px-4 py-2">时间</th><th class="px-4 py-2">耗时</th></tr>
+                            </thead>
+                            <tbody class="divide-y text-slate-600" id="m-logs"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== 常量配置 =====
+        const STORAGE_KEY = 'ds_workflows_v13';
+        const BTN_ACTIVE_CLASS = "px-3 py-1.5 rounded text-sm transition bg-blue-50 text-blue-600 shadow-inner";
+        const BTN_INACTIVE_CLASS = "px-3 py-1.5 rounded text-sm transition text-slate-500 hover:text-slate-700";
+        
+        let currentView = 'card';
+        let workflowList = [];
+
+        // ===== 数据管理 =====
+        function loadWorkflows() {
+            workflowList = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            return workflowList;
+        }
+
+        function saveWorkflows(list) {
+            workflowList = list;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+        }
+
+        function initData() {
+            if (localStorage.getItem(STORAGE_KEY)) return;
+            const demos = [
+                { 
+                    id: 'WF_DEMO_01', 
+                    name: '用户画像每日更新', 
+                    desc: '从ODS层同步用户行为数据，计算标签', 
+                    lastUpdate: Date.now(),
+                    createTime: Date.now() - 86400000 * 7,
+                    creator: '张三',
+                    nodes: [],
+                    edges: [],
+                    runScheduleConfig: { 
+                        type: '定时', 
+                        mode: 'cycle', 
+                        cycleUnit: 'day',
+                        cycleConfig: { time: '02:00', validEnd: new Date(Date.now() + 86400000 * 365).toISOString().split('T')[0] }
+                    }
+                },
+                { 
+                    id: 'WF_DEMO_02', 
+                    name: '交易风控实时监测', 
+                    desc: '实时流处理，监测异常大额交易', 
+                    lastUpdate: Date.now(),
+                    createTime: Date.now() - 86400000 * 3,
+                    creator: '李四',
+                    nodes: [],
+                    edges: [],
+                    runScheduleConfig: { type: '实时' }
+                }
+            ];
+            saveWorkflows(demos);
+        }
+
+        // ===== 模拟数据 =====
+        function getMockStats(id) {
+            const seed = id.charCodeAt(id.length - 1);
+            const statusType = seed % 4;
+            let status = 'pending';
+            if (statusType === 0) status = 'running';
+            else if (statusType === 1) status = 'success';
+            else if (statusType === 2) status = 'fail';
+            else status = 'pending';
+            
+            const isHealthy = statusType !== 2;
+            return {
+                status: status,
+                rate: isHealthy ? 98 : 65,
+                duration: (seed * 12) % 300 + 20
+            };
+        }
+
+        // ===== 视图切换 =====
+        function switchView(mode) {
+            currentView = mode;
+            const btnCard = document.getElementById('btn-card');
+            const btnList = document.getElementById('btn-list');
+            
+            if (mode === 'card') {
+                btnCard.className = BTN_ACTIVE_CLASS;
+                btnList.className = BTN_INACTIVE_CLASS;
+            } else {
+                btnCard.className = BTN_INACTIVE_CLASS;
+                btnList.className = BTN_ACTIVE_CLASS;
+            }
+            render();
+        }
+
+        // ===== 渲染核心逻辑 =====
+        function render() {
+            const container = document.getElementById('content-container');
+            if (workflowList.length === 0) {
+                renderEmpty(container);
+            } else if (currentView === 'card') {
+                renderCardView(container);
+            } else {
+                renderListView(container);
+            }
+        }
+
+        function renderEmpty(container) {
+            container.innerHTML = `<div class="text-center py-24 border-2 border-dashed border-slate-300 rounded-xl bg-white"><div class="text-slate-300 text-5xl mb-4"><i class="fas fa-box-open"></i></div><p class="text-slate-500">暂无工作流，点击右上角新建</p></div>`;
+        }
+
+        function renderCardView(container) {
+            container.className = "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6";
+            container.innerHTML = '';
+            workflowList.forEach(item => {
+                const stats = getMockStats(item.id);
+                const card = createCardElement(item, stats);
+                container.appendChild(card);
+            });
+        }
+
+        function createCardElement(item, stats) {
+            const badgeClass = stats.status === 'success' ? 'badge-success' : 'badge-fail';
+            const icon = stats.status === 'success' ? 'fa-check' : 'fa-times';
+            
+            const div = document.createElement('div');
+            div.className = "bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-lg transition p-0 flex flex-col group overflow-hidden";
+            div.innerHTML = `
+                <div class="p-5 flex-1">
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="font-bold text-slate-800 text-lg group-hover:text-blue-600 transition truncate w-48" title="${item.name}">${item.name}</h3>
+                        <span class="badge ${badgeClass}"><i class="fas ${icon}"></i> ${stats.status.toUpperCase()}</span>
+                    </div>
+                    <p class="text-slate-500 text-sm h-10 line-clamp-2 mb-4">${item.desc || '暂无描述'}</p>
+                    <div class="bg-slate-50 rounded-lg p-3 grid grid-cols-2 gap-4 border border-slate-100">
+                        <div><div class="text-xs text-slate-400">成功率</div><div class="font-bold text-slate-700">${stats.rate}%</div></div>
+                        <div><div class="text-xs text-slate-400">平均耗时</div><div class="font-bold text-slate-700">${stats.duration}s</div></div>
+                    </div>
+                </div>
+                <div class="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center text-sm">
+                    <div class="flex gap-4">
+                        <button class="monitor-btn text-slate-500 hover:text-blue-600 font-medium transition" data-id="${item.id}" data-name="${item.name}" data-rate="${stats.rate}"><i class="fas fa-chart-line mr-1"></i>监控</button>
+                        <a href="dag_editor.html?id=${item.id}" class="text-slate-500 hover:text-blue-600 font-medium transition"><i class="fas fa-edit mr-1"></i>编辑</a>
+                    </div>
+                    <button class="delete-btn text-slate-400 hover:text-red-500 transition" data-id="${item.id}"><i class="fas fa-trash-alt"></i></button>
+                </div>
+            `;
+            return div;
+        }
+
+        function renderListView(container) {
+            container.className = "bg-white rounded-lg border border-slate-200 shadow-sm overflow-x-auto";
+            const thead = `<thead class="bg-slate-50 text-slate-500 font-medium text-xs"><tr>
+                <th class="px-4 py-3">任务计划名称</th>
+                <th class="px-4 py-3">调度类型</th>
+                <th class="px-4 py-3">任务数</th>
+                <th class="px-4 py-3">创建人</th>
+                <th class="px-4 py-3">调度周期</th>
+                <th class="px-4 py-3">创建时间</th>
+                <th class="px-4 py-3">截止时间</th>
+                <th class="px-4 py-3">当前状态</th>
+                <th class="px-4 py-3 text-right">操作</th>
+            </tr></thead>`;
+            const tbody = workflowList.map(item => createTableRow(item, getMockStats(item.id))).join('');
+            container.innerHTML = `<table class="w-full text-sm text-left min-w-[1200px]"><${thead}<tbody>${tbody}</tbody></table>`;
+        }
+
+        function createTableRow(item, stats) {
+            const badgeClass = stats.status === 'success' ? 'badge-success' : stats.status === 'running' ? 'badge-running' : 'badge-fail';
+            const statusText = stats.status === 'success' ? '运行中' : stats.status === 'running' ? '执行中' : stats.status === 'fail' ? '失败' : '待启动';
+            
+            // 获取调度信息
+            const scheduleConfig = item.runScheduleConfig || {};
+            const scheduleType = scheduleConfig.type || '实时';
+            const scheduleCycle = getScheduleCycleText(scheduleConfig);
+            const nodeCount = (item.nodes || []).length;
+            const creator = item.creator || '系统管理员';
+            const createTime = item.createTime ? formatDateTime(item.createTime) : formatDateTime(item.lastUpdate || Date.now());
+            const endTime = scheduleConfig.cycleConfig?.validEnd ? formatDate(scheduleConfig.cycleConfig.validEnd) : '永久有效';
+            
+            return `
+                <tr class="hover:bg-slate-50 transition border-b border-slate-100 last:border-0">
+                    <td class="px-4 py-3 font-bold text-slate-700 hover:text-blue-600 cursor-pointer" onclick="viewWorkflow('${item.id}')" title="${item.name}">${item.name}</td>
+                    <td class="px-4 py-3 text-xs text-slate-600">${scheduleType}</td>
+                    <td class="px-4 py-3 text-xs text-slate-600">${nodeCount}</td>
+                    <td class="px-4 py-3 text-xs text-slate-600">${creator}</td>
+                    <td class="px-4 py-3 text-xs text-slate-600">${scheduleCycle}</td>
+                    <td class="px-4 py-3 text-xs text-slate-500">${createTime}</td>
+                    <td class="px-4 py-3 text-xs text-slate-500">${endTime}</td>
+                    <td class="px-4 py-3"><span class="badge ${badgeClass}">${statusText}</span></td>
+                    <td class="px-4 py-3 text-right">
+                        <div class="flex items-center justify-end gap-2 flex-wrap">
+                            <button class="action-btn text-blue-600 hover:text-blue-800 text-xs px-2 py-1 rounded hover:bg-blue-50" data-action="view" data-id="${item.id}" title="查看">查看</button>
+                            <button class="action-btn text-green-600 hover:text-green-800 text-xs px-2 py-1 rounded hover:bg-green-50" data-action="start" data-id="${item.id}" title="启动">启动</button>
+                            <button class="action-btn text-blue-600 hover:text-blue-800 text-xs px-2 py-1 rounded hover:bg-blue-50" data-action="edit" data-id="${item.id}" title="编辑">编辑</button>
+                            <button class="action-btn text-purple-600 hover:text-purple-800 text-xs px-2 py-1 rounded hover:bg-purple-50" data-action="copy" data-id="${item.id}" title="复制">复制</button>
+                            <button class="action-btn text-orange-600 hover:text-orange-800 text-xs px-2 py-1 rounded hover:bg-orange-50" data-action="history" data-id="${item.id}" title="执行历史">执行历史</button>
+                            <button class="action-btn text-indigo-600 hover:text-indigo-800 text-xs px-2 py-1 rounded hover:bg-indigo-50" data-action="calendar" data-id="${item.id}" title="调度日历">调度日历</button>
+                            <button class="action-btn text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded hover:bg-red-50" data-action="delete" data-id="${item.id}" title="删除">删除</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+        
+        function getScheduleCycleText(config) {
+            if (!config || config.type === '实时') return '实时执行';
+            if (config.type === '定时Cron') {
+                return config.cron || 'Cron表达式';
+            }
+            if (config.mode === 'once') {
+                return '一次性任务';
+            }
+            if (config.mode === 'cycle') {
+                const unit = config.cycleUnit || 'minute';
+                const unitMap = { minute: '分钟', hour: '小时', day: '每天', week: '每周', month: '每月' };
+                return `周期任务(${unitMap[unit] || unit})`;
+            }
+            return '未设置';
+        }
+        
+        function formatDateTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+        
+        function formatDate(dateStr) {
+            if (!dateStr) return '永久有效';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('zh-CN');
+        }
+
+        // ===== 业务操作 =====
+        function createNew() {
+            const modal = document.getElementById('create-modal');
+            const bg = document.getElementById('create-modal-bg');
+            document.getElementById('new-workflow-name').value = '';
+            bg.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('modal-active'), 10);
+        }
+        
+        function closeCreateModal() {
+            const modal = document.getElementById('create-modal');
+            const bg = document.getElementById('create-modal-bg');
+            modal.classList.remove('modal-active');
+            setTimeout(() => bg.classList.add('hidden'), 200);
+        }
+        
+        function confirmCreate() {
+            const nameInput = document.getElementById('new-workflow-name');
+            const name = nameInput.value.trim();
+            if (!name) {
+                alert('请输入任务计划名称');
+                nameInput.focus();
+                return;
+            }
+            const list = loadWorkflows();
+            const newId = 'WF_' + Date.now().toString().slice(-6);
+            list.push({ 
+                id: newId, 
+                name: name, 
+                desc: '', 
+                nodes: [], 
+                edges: [],
+                creator: '当前用户',
+                createTime: Date.now(),
+                runScheduleConfig: { type: '实时' }
+            });
+            saveWorkflows(list);
+            closeCreateModal();
+            render();
+            // 自动跳转到编辑页面
+            setTimeout(() => {
+                location.href = `dag_editor.html?id=${newId}`;
+            }, 100);
+        }
+        
+        function viewWorkflow(id) {
+            location.href = `dag_editor.html?id=${id}`;
+        }
+        
+        function startWorkflow(id) {
+            if (confirm('确定要启动该任务计划吗？')) {
+                // 这里可以添加启动逻辑，比如调用API
+                alert('任务计划已启动（模拟）');
+                // 可以更新状态
+                const list = loadWorkflows();
+                const item = list.find(w => w.id === id);
+                if (item) {
+                    item.status = 'running';
+                    saveWorkflows(list);
+                    render();
+                }
+            }
+        }
+        
+        function editWorkflow(id) {
+            location.href = `dag_editor.html?id=${id}`;
+        }
+        
+        function copyWorkflow(id) {
+            const list = loadWorkflows();
+            const item = list.find(w => w.id === id);
+            if (!item) return;
+            
+            const newId = 'WF_' + Date.now().toString().slice(-6);
+            const copied = {
+                ...item,
+                id: newId,
+                name: item.name + ' (副本)',
+                createTime: Date.now(),
+                creator: '当前用户'
+            };
+            list.push(copied);
+            saveWorkflows(list);
+            render();
+            alert('复制成功！');
+        }
+        
+        function showHistory(id) {
+            // 显示执行历史弹窗
+            alert(`查看任务计划 ${id} 的执行历史（功能待实现）`);
+        }
+        
+        function showCalendar(id) {
+            // 显示调度日历弹窗
+            const list = loadWorkflows();
+            const item = list.find(w => w.id === id);
+            if (!item) return;
+            
+            const config = item.runScheduleConfig || {};
+            const calendar = config.cycleConfig?.calendar || '默认日历';
+            const customCalendar = config.cycleConfig?.customCalendar || '';
+            
+            let calendarInfo = `调度日历: ${calendar}`;
+            if (calendar === 'custom' && customCalendar) {
+                calendarInfo += ` (${customCalendar})`;
+            }
+            
+            alert(`${item.name}\n${calendarInfo}\n\n调度日历详情功能待完善`);
+        }
+
+        function deleteWf(id) {
+            if (confirm("确定删除吗？")) {
+                const list = loadWorkflows().filter(i => i.id !== id);
+                saveWorkflows(list);
+                render();
+            }
+        }
+
+        // ===== 监控面板 =====
+        function openMonitor(id, name, rate) {
+            const modal = document.getElementById('monitor-modal');
+            const bg = document.getElementById('monitor-modal-bg');
+            
+            document.getElementById('m-title').innerText = name;
+            document.getElementById('m-id').innerText = 'ID: ' + id;
+            document.getElementById('m-rate').innerText = rate + "%";
+            document.getElementById('m-duration').innerText = Math.floor(Math.random() * 200 + 50) + "s";
+
+            renderChart();
+            renderLogs();
+
+            bg.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('modal-active'), 10);
+        }
+
+        function renderChart() {
+            const chart = document.getElementById('m-chart');
+            chart.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            
+            for (let i = 0; i < 30; i++) {
+                const h = Math.random() * 80 + 20;
+                const isFail = Math.random() > 0.9;
+                const bar = document.createElement('div');
+                bar.className = `trend-bar w-2 rounded-t-sm ${isFail ? 'bg-red-400' : 'bg-blue-400'}`;
+                bar.style.height = h + '%';
+                fragment.appendChild(bar);
+            }
+            chart.appendChild(fragment);
+        }
+
+        function renderLogs() {
+            const logs = document.getElementById('m-logs');
+            logs.innerHTML = Array.from({ length: 5 }, (_, i) => {
+                const success = Math.random() > 0.2;
+                const badgeClass = success ? 'badge-success' : 'badge-fail';
+                const status = success ? 'SUCCESS' : 'FAIL';
+                const time = new Date(Date.now() - i * 3600000).toLocaleTimeString();
+                const duration = (Math.random() * 100).toFixed(1);
+                return `<tr><td class="px-4 py-2"><span class="badge ${badgeClass}">${status}</span></td><td class="px-4 py-2 text-xs text-slate-500">${time}</td><td class="px-4 py-2 text-xs font-mono">${duration}s</td></tr>`;
+            }).join('');
+        }
+
+        function closeMonitor() {
+            const modal = document.getElementById('monitor-modal');
+            const bg = document.getElementById('monitor-modal-bg');
+            modal.classList.remove('modal-active');
+            setTimeout(() => bg.classList.add('hidden'), 200);
+        }
+
+        // ===== 事件代理 =====
+        function setupEventDelegation() {
+            document.getElementById('content-container').addEventListener('click', (e) => {
+                if (e.target.closest('.monitor-btn')) {
+                    const btn = e.target.closest('.monitor-btn');
+                    openMonitor(btn.dataset.id, btn.dataset.name, btn.dataset.rate);
+                } else if (e.target.closest('.delete-btn')) {
+                    const btn = e.target.closest('.delete-btn');
+                    deleteWf(btn.dataset.id);
+                } else if (e.target.closest('.action-btn')) {
+                    const btn = e.target.closest('.action-btn');
+                    const action = btn.dataset.action;
+                    const id = btn.dataset.id;
+                    
+                    switch(action) {
+                        case 'view':
+                            viewWorkflow(id);
+                            break;
+                        case 'start':
+                            startWorkflow(id);
+                            break;
+                        case 'edit':
+                            editWorkflow(id);
+                            break;
+                        case 'copy':
+                            copyWorkflow(id);
+                            break;
+                        case 'history':
+                            showHistory(id);
+                            break;
+                        case 'calendar':
+                            showCalendar(id);
+                            break;
+                        case 'delete':
+                            deleteWf(id);
+                            break;
+                    }
+                }
+            });
+        }
+
+        // ===== 初始化 =====
+        initData();
+        loadWorkflows();
+        render();
+        setupEventDelegation();
+    </script>
+    </div>
+</body>
+</html>
