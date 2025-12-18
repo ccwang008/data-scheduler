@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>资源配置管理 - 调度系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f1f5f9; }
+        .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+        .badge-file { background: #dbeafe; color: #1d4ed8; }
+        .badge-jar { background: #fef3c7; color: #d97706; }
+        .badge-python { background: #d1fae5; color: #059669; }
+        .badge-sql { background: #e0e7ff; color: #6366f1; }
+        .badge-other { background: #f1f5f9; color: #64748b; }
+        
+        /* 模态框动画 */
+        .modal-enter { opacity: 0; transform: scale(0.95); pointer-events: none; transition: all 0.2s; }
+        .modal-active { opacity: 1; transform: scale(1); pointer-events: auto; }
+        
+        .file-tree { user-select: none; }
+        .file-tree-item { cursor: pointer; }
+        .file-tree-item:hover { background: #f1f5f9; }
+    </style>
+</head>
+<body class="text-slate-800">
+    <div>
+        <nav class="bg-white text-slate-800 h-16 flex items-center justify-between px-8 shadow-sm border-b border-slate-200 sticky top-0 z-30">
+            <div class="flex items-center gap-6">
+                <a href="dag_list.html" class="text-slate-600 hover:text-slate-800 text-sm"><i class="fas fa-arrow-left mr-1"></i> 返回列表</a>
+                <div class="h-6 w-px bg-slate-300"></div>
+                <h1 class="text-lg font-bold text-slate-800">资源配置管理</h1>
+            </div>
+            <div class="flex gap-4 text-sm text-slate-600">
+                <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div> 调度中心正常</div>
+            </div>
+        </nav>
+
+        <div class="w-full px-8 py-8">
+            <div class="flex justify-between items-end mb-6">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-800">资源文件管理</h2>
+                    <p class="text-slate-500 text-sm mt-1">管理调度任务所需的资源文件（JAR、Python脚本、SQL、配置文件等）</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <input id="search-input" type="text" placeholder="搜索资源名称" class="pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:border-blue-500 w-60">
+                        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    </div>
+                    <button onclick="batchDelete()" class="px-3 py-2 rounded border border-slate-300 hover:bg-red-50 text-red-600 text-sm">批量删除</button>
+                    <button onclick="createFolder()" class="px-3 py-2 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm"><i class="fas fa-folder-plus mr-1"></i> 新建文件夹</button>
+                    <button onclick="uploadResource()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow-lg shadow-blue-600/20 text-sm font-medium flex items-center gap-2 transition transform hover:-translate-y-0.5">
+                        <i class="fas fa-upload"></i> 上传资源
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-12 gap-6">
+                <!-- 左侧目录树 -->
+                <div class="col-span-3 bg-white rounded-lg border border-slate-200 shadow-sm p-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-bold text-slate-800 text-sm">资源目录</h3>
+                        <button onclick="refreshTree()" class="text-slate-400 hover:text-slate-600 text-xs"><i class="fas fa-sync-alt"></i></button>
+                    </div>
+                    <div id="folder-tree" class="file-tree text-sm text-slate-700 space-y-1">
+                        <!-- 目录树内容 -->
+                    </div>
+                </div>
+
+                <!-- 右侧资源列表 -->
+                <div class="col-span-9">
+                    <div id="content-container" class="bg-white rounded-lg border border-slate-200 shadow-sm min-h-[500px]">
+                        <!-- 资源列表内容 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传资源弹窗 -->
+    <div id="upload-modal-bg" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm transition-opacity" onclick="closeUploadModal()"></div>
+    <div id="upload-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-enter p-4">
+        <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="font-bold text-lg text-slate-800">上传资源文件</h3>
+                <button onclick="closeUploadModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 transition text-slate-500"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">选择文件</label>
+                    <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-blue-500 transition">
+                        <input type="file" id="file-input" multiple class="hidden" onchange="handleFileSelect(event)">
+                        <label for="file-input" class="cursor-pointer">
+                            <i class="fas fa-cloud-upload-alt text-4xl text-slate-400 mb-3"></i>
+                            <p class="text-sm text-slate-600">点击或拖拽文件到此处上传</p>
+                            <p class="text-xs text-slate-400 mt-1">支持 JAR、Python、SQL、配置文件等</p>
+                        </label>
+                    </div>
+                    <div id="file-list" class="mt-4 space-y-2"></div>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">上传路径</label>
+                    <input type="text" id="upload-path" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="/" value="/">
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t bg-slate-50 flex justify-end gap-3 rounded-b-xl">
+                <button onclick="closeUploadModal()" class="px-4 py-2 text-sm rounded border border-slate-300 text-slate-600 hover:bg-slate-50">取消</button>
+                <button onclick="confirmUpload()" class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">确认上传</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建文件夹弹窗 -->
+    <div id="folder-modal-bg" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm transition-opacity" onclick="closeFolderModal()"></div>
+    <div id="folder-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-enter p-4">
+        <div class="bg-white w-full max-w-md rounded-xl shadow-2xl flex flex-col" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="font-bold text-lg text-slate-800">新建文件夹</h3>
+                <button onclick="closeFolderModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 transition text-slate-500"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6">
+                <div class="mb-4">
+                    <label class="block text-sm font-bold text-slate-700 mb-2">文件夹名称</label>
+                    <input type="text" id="folder-name" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="请输入文件夹名称">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">父目录</label>
+                    <input type="text" id="folder-path" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" placeholder="/" value="/">
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t bg-slate-50 flex justify-end gap-3 rounded-b-xl">
+                <button onclick="closeFolderModal()" class="px-4 py-2 text-sm rounded border border-slate-300 text-slate-600 hover:bg-slate-50">取消</button>
+                <button onclick="confirmCreateFolder()" class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">确认创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 资源详情弹窗 -->
+    <div id="detail-modal-bg" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm transition-opacity" onclick="closeDetailModal()"></div>
+    <div id="detail-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-enter p-4">
+        <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh]" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="font-bold text-lg text-slate-800">资源详情</h3>
+                <button onclick="closeDetailModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 transition text-slate-500"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-6 space-y-4 text-sm text-slate-700 overflow-y-auto">
+                <div class="grid grid-cols-2 gap-4">
+                    <div><span class="font-bold text-slate-800">资源名称：</span><span id="detail-name">--</span></div>
+                    <div><span class="font-bold text-slate-800">资源类型：</span><span id="detail-type">--</span></div>
+                    <div><span class="font-bold text-slate-800">文件大小：</span><span id="detail-size">--</span></div>
+                    <div><span class="font-bold text-slate-800">存储路径：</span><span id="detail-path">--</span></div>
+                    <div><span class="font-bold text-slate-800">创建人：</span><span id="detail-creator">--</span></div>
+                    <div><span class="font-bold text-slate-800">创建时间：</span><span id="detail-time">--</span></div>
+                    <div><span class="font-bold text-slate-800">更新时间：</span><span id="detail-update">--</span></div>
+                    <div><span class="font-bold text-slate-800">使用次数：</span><span id="detail-usage">--</span></div>
+                </div>
+                <div>
+                    <span class="font-bold text-slate-800">描述：</span>
+                    <div id="detail-desc" class="mt-2 text-slate-600">--</div>
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t bg-slate-50 flex justify-end gap-3 rounded-b-xl">
+                <button onclick="downloadResource()" class="px-4 py-2 text-sm rounded border border-blue-300 text-blue-600 hover:bg-blue-50">下载</button>
+                <button onclick="deleteResource()" class="px-4 py-2 text-sm rounded border border-red-300 text-red-600 hover:bg-red-50">删除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== 常量配置 =====
+        const STORAGE_KEY = 'ds_resources_v1';
+        const PAGE_SIZE = 10;
+        
+        let currentPath = '/';
+        let currentPage = 1;
+        let searchKeyword = '';
+        let selectedIds = new Set();
+        let resourceList = [];
+        let currentDetailId = null;
+
+        // ===== 数据管理 =====
+        function loadResources() {
+            resourceList = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            return resourceList;
+        }
+
+        function saveResources(list) {
+            resourceList = list;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+        }
+
+        function initData() {
+            if (localStorage.getItem(STORAGE_KEY)) return;
+            const demos = [
+                {
+                    id: 'res_001',
+                    name: 'spark-etl.jar',
+                    type: 'jar',
+                    size: 2456789,
+                    path: '/libs',
+                    creator: '张三',
+                    createTime: Date.now() - 86400000 * 5,
+                    updateTime: Date.now() - 86400000 * 2,
+                    usage: 12,
+                    desc: 'Spark ETL 处理核心库'
+                },
+                {
+                    id: 'res_002',
+                    name: 'data_clean.py',
+                    type: 'python',
+                    size: 45678,
+                    path: '/scripts',
+                    creator: '李四',
+                    createTime: Date.now() - 86400000 * 3,
+                    updateTime: Date.now() - 86400000 * 1,
+                    usage: 8,
+                    desc: '数据清洗脚本'
+                },
+                {
+                    id: 'res_003',
+                    name: 'user_query.sql',
+                    type: 'sql',
+                    size: 1234,
+                    path: '/sql',
+                    creator: '王五',
+                    createTime: Date.now() - 86400000 * 7,
+                    updateTime: Date.now() - 86400000 * 7,
+                    usage: 25,
+                    desc: '用户查询SQL脚本'
+                },
+                {
+                    id: 'res_004',
+                    name: 'config.properties',
+                    type: 'other',
+                    size: 567,
+                    path: '/config',
+                    creator: '赵六',
+                    createTime: Date.now() - 86400000 * 2,
+                    updateTime: Date.now() - 3600000,
+                    usage: 5,
+                    desc: '系统配置文件'
+                },
+                {
+                    id: 'res_005',
+                    name: 'hive-udf.jar',
+                    type: 'jar',
+                    size: 1890123,
+                    path: '/libs',
+                    creator: '张三',
+                    createTime: Date.now() - 86400000 * 10,
+                    updateTime: Date.now() - 86400000 * 8,
+                    usage: 15,
+                    desc: 'Hive UDF 自定义函数库'
+                }
+            ];
+            saveResources(demos);
+        }
+
+        // ===== 工具函数 =====
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function formatDateTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function getFileTypeBadge(type) {
+            const badges = {
+                jar: { class: 'badge-jar', text: 'JAR' },
+                python: { class: 'badge-python', text: 'Python' },
+                sql: { class: 'badge-sql', text: 'SQL' },
+                file: { class: 'badge-file', text: '文件' },
+                other: { class: 'badge-other', text: '其他' }
+            };
+            return badges[type] || badges.other;
+        }
+
+        function getFileIcon(type) {
+            const icons = {
+                jar: 'fa-file-archive',
+                python: 'fa-file-code',
+                sql: 'fa-database',
+                file: 'fa-file',
+                other: 'fa-file-alt'
+            };
+            return icons[type] || icons.other;
+        }
+
+        // ===== 目录树渲染 =====
+        function renderFolderTree() {
+            const tree = document.getElementById('folder-tree');
+            const folders = new Set(['/']);
+            resourceList.forEach(r => {
+                const parts = r.path.split('/').filter(p => p);
+                let path = '/';
+                folders.add(path);
+                parts.forEach(part => {
+                    path += (path === '/' ? '' : '/') + part;
+                    folders.add(path);
+                });
+            });
+            
+            const sortedFolders = Array.from(folders).sort();
+            tree.innerHTML = sortedFolders.map(path => {
+                const isActive = path === currentPath;
+                const depth = path.split('/').filter(p => p).length;
+                const indent = depth * 16;
+                const name = path === '/' ? '根目录' : path.split('/').pop();
+                return `
+                    <div class="file-tree-item px-2 py-1 rounded ${isActive ? 'bg-blue-50 text-blue-600' : ''}" 
+                         style="padding-left: ${indent + 8}px" 
+                         onclick="selectFolder('${path}')">
+                        <i class="fas fa-folder${isActive ? '-open' : ''} mr-2"></i>${name}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function selectFolder(path) {
+            currentPath = path;
+            currentPage = 1;
+            renderFolderTree();
+            render();
+        }
+
+        function refreshTree() {
+            renderFolderTree();
+            render();
+        }
+
+        // ===== 过滤和分页 =====
+        function getFilteredResources() {
+            let filtered = resourceList.filter(r => {
+                const matchPath = r.path === currentPath || r.path.startsWith(currentPath + '/');
+                const matchSearch = !searchKeyword || r.name.toLowerCase().includes(searchKeyword.toLowerCase());
+                return matchPath && matchSearch;
+            });
+            return filtered;
+        }
+
+        function render() {
+            const container = document.getElementById('content-container');
+            const filtered = getFilteredResources();
+            const total = filtered.length;
+            const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            currentPage = Math.min(Math.max(1, currentPage), totalPages);
+            const start = (currentPage - 1) * PAGE_SIZE;
+            const pageItems = filtered.slice(start, start + PAGE_SIZE);
+
+            if (pageItems.length === 0) {
+                container.innerHTML = `<div class="text-center py-24"><div class="text-slate-300 text-5xl mb-4"><i class="fas fa-folder-open"></i></div><p class="text-slate-500">当前目录暂无资源</p></div>`;
+                return;
+            }
+
+            const thead = `<thead class="bg-slate-50 text-slate-500 font-medium text-xs border-b"><tr>
+                <th class="px-3 py-3 w-10 text-center"><input id="master-checkbox" type="checkbox" class="master-checkbox w-4 h-4 rounded border-slate-300"></th>
+                <th class="px-4 py-3">资源名称</th>
+                <th class="px-4 py-3">类型</th>
+                <th class="px-4 py-3">大小</th>
+                <th class="px-4 py-3">创建人</th>
+                <th class="px-4 py-3">创建时间</th>
+                <th class="px-4 py-3">使用次数</th>
+                <th class="px-4 py-3 text-right">操作</th>
+            </tr></thead>`;
+            
+            const tbody = pageItems.map(item => {
+                const badge = getFileTypeBadge(item.type);
+                return `
+                    <tr class="hover:bg-slate-50 transition border-b border-slate-100 last:border-0">
+                        <td class="px-3 py-3 text-center"><input type="checkbox" class="row-checkbox w-4 h-4 rounded border-slate-300" data-id="${item.id}" ${selectedIds.has(item.id) ? 'checked' : ''}></td>
+                        <td class="px-4 py-3">
+                            <div class="flex items-center gap-2">
+                                <i class="fas ${getFileIcon(item.type)} text-slate-400"></i>
+                                <span class="font-medium text-slate-700">${item.name}</span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-3"><span class="badge ${badge.class}">${badge.text}</span></td>
+                        <td class="px-4 py-3 text-xs text-slate-600">${formatFileSize(item.size)}</td>
+                        <td class="px-4 py-3 text-xs text-slate-600">${item.creator}</td>
+                        <td class="px-4 py-3 text-xs text-slate-500">${formatDateTime(item.createTime)}</td>
+                        <td class="px-4 py-3 text-xs text-slate-600">${item.usage || 0}</td>
+                        <td class="px-4 py-3 text-right">
+                            <div class="flex items-center justify-end gap-2 text-xs">
+                                <button class="text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50" onclick="viewDetail('${item.id}')">详情</button>
+                                <button class="text-green-600 hover:text-green-800 px-2 py-1 rounded hover:bg-green-50" onclick="downloadSingle('${item.id}')">下载</button>
+                                <button class="text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50" onclick="deleteSingle('${item.id}')">删除</button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            const pagination = renderPagination(total, totalPages);
+            container.innerHTML = `<table class="w-full text-sm text-left">${thead}<tbody>${tbody}</tbody></table>${pagination}`;
+            
+            setupCheckboxes();
+        }
+
+        function renderPagination(total, totalPages) {
+            if (totalPages <= 1) return '';
+            
+            const pages = [];
+            const maxVisible = 5;
+            let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+            let end = Math.min(totalPages, start + maxVisible - 1);
+            if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
+
+            if (start > 1) pages.push(`<button class="page-btn px-2 py-1 border rounded hover:bg-slate-50" data-page="1">1</button>`);
+            if (start > 2) pages.push(`<span class="px-2">...</span>`);
+
+            for (let i = start; i <= end; i++) {
+                pages.push(`<button class="page-btn px-2 py-1 border rounded ${i === currentPage ? 'bg-blue-50 text-blue-600 border-blue-300' : 'hover:bg-slate-50'}" data-page="${i}">${i}</button>`);
+            }
+
+            if (end < totalPages - 1) pages.push(`<span class="px-2">...</span>`);
+            if (end < totalPages) pages.push(`<button class="page-btn px-2 py-1 border rounded hover:bg-slate-50" data-page="${totalPages}">${totalPages}</button>`);
+
+            return `
+                <div class="flex justify-between items-center px-4 py-3 text-xs text-slate-600 border-t">
+                    <div>共 ${total} 条，第 ${currentPage}/${totalPages} 页，每页 ${PAGE_SIZE} 条</div>
+                    <div class="flex items-center gap-2">
+                        <button class="page-btn px-2 py-1 border rounded ${currentPage === 1 ? 'text-slate-400 border-slate-200 cursor-not-allowed' : 'hover:bg-slate-50'}" data-page="prev" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
+                        ${pages.join('')}
+                        <button class="page-btn px-2 py-1 border rounded ${currentPage === totalPages ? 'text-slate-400 border-slate-200 cursor-not-allowed' : 'hover:bg-slate-50'}" data-page="next" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+                        <span class="text-slate-400 mx-2">|</span>
+                        <input type="number" id="page-jump" min="1" max="${totalPages}" value="${currentPage}" class="w-16 px-2 py-1 border rounded text-center text-xs" onkeypress="if(event.key==='Enter') jumpToPage()">
+                        <button onclick="jumpToPage()" class="px-2 py-1 border rounded hover:bg-slate-50 text-xs">跳转</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ===== 复选框管理 =====
+        function setupCheckboxes() {
+            const master = document.getElementById('master-checkbox');
+            const rows = document.querySelectorAll('.row-checkbox');
+            
+            if (master) {
+                const allChecked = pageItems.every(item => selectedIds.has(item.id));
+                master.checked = allChecked && rows.length > 0;
+                master.onchange = () => {
+                    rows.forEach(cb => {
+                        const id = cb.dataset.id;
+                        if (master.checked) {
+                            selectedIds.add(id);
+                            cb.checked = true;
+                        } else {
+                            selectedIds.delete(id);
+                            cb.checked = false;
+                        }
+                    });
+                };
+            }
+
+            rows.forEach(cb => {
+                cb.onchange = () => {
+                    const id = cb.dataset.id;
+                    if (cb.checked) {
+                        selectedIds.add(id);
+                    } else {
+                        selectedIds.delete(id);
+                        if (master) master.checked = false;
+                    }
+                };
+            });
+        }
+
+        // ===== 搜索 =====
+        document.getElementById('search-input')?.addEventListener('input', (e) => {
+            searchKeyword = e.target.value;
+            currentPage = 1;
+            render();
+        });
+
+        // ===== 分页 =====
+        function jumpToPage() {
+            const input = document.getElementById('page-jump');
+            const page = parseInt(input.value);
+            if (page >= 1) {
+                currentPage = Math.min(page, Math.ceil(getFilteredResources().length / PAGE_SIZE));
+                render();
+            }
+        }
+
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('page-btn')) {
+                const page = e.target.dataset.page;
+                if (page === 'prev') currentPage = Math.max(1, currentPage - 1);
+                else if (page === 'next') currentPage = Math.min(Math.ceil(getFilteredResources().length / PAGE_SIZE), currentPage + 1);
+                else currentPage = parseInt(page);
+                render();
+            }
+        });
+
+        // ===== 上传资源 =====
+        let selectedFiles = [];
+
+        function uploadResource() {
+            selectedFiles = [];
+            document.getElementById('file-list').innerHTML = '';
+            document.getElementById('file-input').value = '';
+            document.getElementById('upload-path').value = currentPath;
+            const modal = document.getElementById('upload-modal');
+            const bg = document.getElementById('upload-modal-bg');
+            bg.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('modal-active'), 10);
+        }
+
+        function handleFileSelect(event) {
+            selectedFiles = Array.from(event.target.files);
+            const list = document.getElementById('file-list');
+            list.innerHTML = selectedFiles.map((file, idx) => {
+                const type = getFileTypeFromName(file.name);
+                const badge = getFileTypeBadge(type);
+                return `
+                    <div class="flex items-center justify-between p-2 bg-slate-50 rounded border">
+                        <div class="flex items-center gap-2">
+                            <i class="fas ${getFileIcon(type)} text-slate-400"></i>
+                            <span class="text-sm text-slate-700">${file.name}</span>
+                            <span class="badge ${badge.class}">${badge.text}</span>
+                            <span class="text-xs text-slate-500">${formatFileSize(file.size)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getFileTypeFromName(name) {
+            const ext = name.split('.').pop().toLowerCase();
+            if (ext === 'jar') return 'jar';
+            if (ext === 'py') return 'python';
+            if (ext === 'sql') return 'sql';
+            return 'other';
+        }
+
+        function confirmUpload() {
+            if (selectedFiles.length === 0) {
+                alert('请选择要上传的文件');
+                return;
+            }
+            const path = document.getElementById('upload-path').value || '/';
+            const list = loadResources();
+            selectedFiles.forEach(file => {
+                const type = getFileTypeFromName(file.name);
+                const newId = 'res_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+                list.push({
+                    id: newId,
+                    name: file.name,
+                    type: type,
+                    size: file.size,
+                    path: path,
+                    creator: '当前用户',
+                    createTime: Date.now(),
+                    updateTime: Date.now(),
+                    usage: 0,
+                    desc: ''
+                });
+            });
+            saveResources(list);
+            closeUploadModal();
+            renderFolderTree();
+            render();
+            alert(`成功上传 ${selectedFiles.length} 个文件`);
+        }
+
+        function closeUploadModal() {
+            const modal = document.getElementById('upload-modal');
+            const bg = document.getElementById('upload-modal-bg');
+            modal.classList.remove('modal-active');
+            setTimeout(() => bg.classList.add('hidden'), 200);
+        }
+
+        // ===== 新建文件夹 =====
+        function createFolder() {
+            document.getElementById('folder-name').value = '';
+            document.getElementById('folder-path').value = currentPath;
+            const modal = document.getElementById('folder-modal');
+            const bg = document.getElementById('folder-modal-bg');
+            bg.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('modal-active'), 10);
+        }
+
+        function confirmCreateFolder() {
+            const name = document.getElementById('folder-name').value.trim();
+            if (!name) {
+                alert('请输入文件夹名称');
+                return;
+            }
+            const parentPath = document.getElementById('folder-path').value || '/';
+            const newPath = parentPath === '/' ? '/' + name : parentPath + '/' + name;
+            // 文件夹通过路径存在性判断，这里只是更新树结构
+            closeFolderModal();
+            selectFolder(newPath);
+            alert('文件夹创建成功（模拟）');
+        }
+
+        function closeFolderModal() {
+            const modal = document.getElementById('folder-modal');
+            const bg = document.getElementById('folder-modal-bg');
+            modal.classList.remove('modal-active');
+            setTimeout(() => bg.classList.add('hidden'), 200);
+        }
+
+        // ===== 资源详情 =====
+        function viewDetail(id) {
+            const item = resourceList.find(r => r.id === id);
+            if (!item) return;
+            currentDetailId = id;
+            const badge = getFileTypeBadge(item.type);
+            document.getElementById('detail-name').innerText = item.name;
+            document.getElementById('detail-type').innerHTML = `<span class="badge ${badge.class}">${badge.text}</span>`;
+            document.getElementById('detail-size').innerText = formatFileSize(item.size);
+            document.getElementById('detail-path').innerText = item.path;
+            document.getElementById('detail-creator').innerText = item.creator;
+            document.getElementById('detail-time').innerText = formatDateTime(item.createTime);
+            document.getElementById('detail-update').innerText = formatDateTime(item.updateTime);
+            document.getElementById('detail-usage').innerText = item.usage || 0;
+            document.getElementById('detail-desc').innerText = item.desc || '无描述';
+            
+            const modal = document.getElementById('detail-modal');
+            const bg = document.getElementById('detail-modal-bg');
+            bg.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('modal-active'), 10);
+        }
+
+        function closeDetailModal() {
+            const modal = document.getElementById('detail-modal');
+            const bg = document.getElementById('detail-modal-bg');
+            modal.classList.remove('modal-active');
+            setTimeout(() => bg.classList.add('hidden'), 200);
+        }
+
+        // ===== 下载资源 =====
+        function downloadResource() {
+            if (!currentDetailId) return;
+            downloadSingle(currentDetailId);
+        }
+
+        function downloadSingle(id) {
+            const item = resourceList.find(r => r.id === id);
+            if (!item) return;
+            // 模拟下载
+            alert(`开始下载：${item.name}\n路径：${item.path}\n大小：${formatFileSize(item.size)}\n\n（实际环境中会触发真实文件下载）`);
+        }
+
+        // ===== 删除资源 =====
+        function deleteResource() {
+            if (!currentDetailId) return;
+            deleteSingle(currentDetailId);
+        }
+
+        function deleteSingle(id) {
+            if (!confirm('确定要删除该资源吗？')) return;
+            const list = loadResources();
+            const filtered = list.filter(r => r.id !== id);
+            saveResources(filtered);
+            selectedIds.delete(id);
+            if (currentDetailId === id) closeDetailModal();
+            renderFolderTree();
+            render();
+            alert('删除成功');
+        }
+
+        function batchDelete() {
+            if (selectedIds.size === 0) {
+                alert('请选择要删除的资源');
+                return;
+            }
+            if (!confirm(`确定要删除选中的 ${selectedIds.size} 个资源吗？`)) return;
+            const list = loadResources();
+            const filtered = list.filter(r => !selectedIds.has(r.id));
+            saveResources(filtered);
+            selectedIds.clear();
+            renderFolderTree();
+            render();
+            alert('批量删除成功');
+        }
+
+        // ===== 初始化 =====
+        initData();
+        loadResources();
+        renderFolderTree();
+        render();
+    </script>
+</body>
+</html>
+
